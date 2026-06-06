@@ -313,12 +313,15 @@ def icon_for_category(category: str) -> str:
 
 def default_inventory() -> List[Dict[str, Any]]:
     """
-    Initial stock loaded from the client's pricing sheet structure, using neutral product labels.
-    The licensed adult/store owner can update Product 001, Product 002, etc. to final display names
-    inside the Inventory editor before trading.
+    Initial go-live stock loaded from the client's latest Saint Herb pricing sheet.
+
+    Pricing rule used for this live-lite file:
+    - Product names, quantities, categories and units follow the attached stock list.
+    - Unit Price is the rounded/friendly selling price selected from the helper pricing columns.
+    - Live sales start at R0.00. Opening Stock Value = quantity_on_hand × unit_price.
     """
     return [{'id': 'PR-001',
-  'name': 'Product 001',
+  'name': 'Black Cherry Pre-Roll x25 IND',
   'category': 'Pre-Rolls',
   'unit': 'unit',
   'quantity_on_hand': 25.0,
@@ -326,7 +329,7 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 120.0,
   'daily_sales_estimate': 1.79},
  {'id': 'PR-002',
-  'name': 'Product 002',
+  'name': 'Passion Fruit Pre-Roll x25 IND',
   'category': 'Pre-Rolls',
   'unit': 'unit',
   'quantity_on_hand': 25.0,
@@ -334,7 +337,7 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 120.0,
   'daily_sales_estimate': 1.79},
  {'id': 'PR-003',
-  'name': 'Product 003',
+  'name': 'Sour Diesel GH Pre-Roll x25',
   'category': 'Pre-Rolls',
   'unit': 'unit',
   'quantity_on_hand': 25.0,
@@ -342,7 +345,7 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 60.0,
   'daily_sales_estimate': 1.79},
  {'id': 'PR-004',
-  'name': 'Product 004',
+  'name': 'Blueberry GH Pre-Roll x25',
   'category': 'Pre-Rolls',
   'unit': 'unit',
   'quantity_on_hand': 25.0,
@@ -350,7 +353,7 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 60.0,
   'daily_sales_estimate': 1.79},
  {'id': 'PR-005',
-  'name': 'Product 005',
+  'name': 'Super Lemon GH Pre-Roll x25',
   'category': 'Pre-Rolls',
   'unit': 'unit',
   'quantity_on_hand': 25.0,
@@ -358,7 +361,7 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 65.0,
   'daily_sales_estimate': 1.79},
  {'id': 'PR-006',
-  'name': 'Product 006',
+  'name': 'The offering Pre-Roll x21',
   'category': 'Pre-Rolls',
   'unit': 'unit',
   'quantity_on_hand': 21.0,
@@ -366,7 +369,7 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 45.0,
   'daily_sales_estimate': 1.5},
  {'id': 'PR-007',
-  'name': 'Product 007',
+  'name': 'Saint Reserve Pre-Roll x28',
   'category': 'Pre-Rolls',
   'unit': 'unit',
   'quantity_on_hand': 28.0,
@@ -374,7 +377,7 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 45.0,
   'daily_sales_estimate': 2.0},
  {'id': 'PR-008',
-  'name': 'Product 008',
+  'name': 'Holy Grail Pre-Roll x31',
   'category': 'Pre-Rolls',
   'unit': 'unit',
   'quantity_on_hand': 31.0,
@@ -382,15 +385,15 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 45.0,
   'daily_sales_estimate': 2.21},
  {'id': 'FL-001',
-  'name': 'Product 009',
+  'name': 'Wedding Cake Flower 10g',
   'category': 'Flower / Bud',
   'unit': 'gram',
   'quantity_on_hand': 10.0,
   'opening_quantity': 10.0,
-  'unit_price': 50.0,
+  'unit_price': 45.0,
   'daily_sales_estimate': 1.0},
  {'id': 'FL-002',
-  'name': 'Product 010',
+  'name': 'Kimbo Hybrid Flower',
   'category': 'Flower / Bud',
   'unit': 'gram',
   'quantity_on_hand': 50.0,
@@ -398,7 +401,7 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 100.0,
   'daily_sales_estimate': 3.57},
  {'id': 'FL-003',
-  'name': 'Product 011',
+  'name': 'Maple Flower A 50g',
   'category': 'Flower / Bud',
   'unit': 'gram',
   'quantity_on_hand': 50.0,
@@ -406,7 +409,7 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 110.0,
   'daily_sales_estimate': 3.57},
  {'id': 'FL-004',
-  'name': 'Product 012',
+  'name': 'Exotic Passion Fruit AAA Med 60g',
   'category': 'Flower / Bud',
   'unit': 'gram',
   'quantity_on_hand': 50.0,
@@ -414,7 +417,7 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 135.0,
   'daily_sales_estimate': 3.57},
  {'id': 'FL-005',
-  'name': 'Product 013',
+  'name': 'Sour Diesel AA Flower 50g',
   'category': 'Flower / Bud',
   'unit': 'gram',
   'quantity_on_hand': 50.0,
@@ -422,31 +425,31 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 120.0,
   'daily_sales_estimate': 3.57},
  {'id': 'FL-006',
-  'name': 'Product 014',
+  'name': 'Saint Reserve Indoor Hyrid',
   'category': 'Flower / Bud',
   'unit': 'gram',
   'quantity_on_hand': 130.0,
   'opening_quantity': 130.0,
-  'unit_price': 140.0,
+  'unit_price': 135.0,
   'daily_sales_estimate': 9.29},
  {'id': 'FL-007',
-  'name': 'Product 015',
+  'name': 'The offering',
   'category': 'Flower / Bud',
   'unit': 'gram',
   'quantity_on_hand': 130.0,
   'opening_quantity': 130.0,
-  'unit_price': 140.0,
+  'unit_price': 135.0,
   'daily_sales_estimate': 9.29},
  {'id': 'FL-008',
-  'name': 'Product 016',
+  'name': 'Holy Grail',
   'category': 'Flower / Bud',
   'unit': 'gram',
   'quantity_on_hand': 130.0,
   'opening_quantity': 130.0,
-  'unit_price': 140.0,
+  'unit_price': 135.0,
   'daily_sales_estimate': 9.29},
  {'id': 'BV-001',
-  'name': 'Product 017',
+  'name': 'Astroform Vita Soda - Cosmic Cranberry',
   'category': 'Beverages',
   'unit': 'bottle',
   'quantity_on_hand': 6.0,
@@ -454,7 +457,7 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 120.0,
   'daily_sales_estimate': 1.0},
  {'id': 'BV-002',
-  'name': 'Product 018',
+  'name': 'Astroform Vita Soda - Lunar lemon',
   'category': 'Beverages',
   'unit': 'bottle',
   'quantity_on_hand': 6.0,
@@ -462,7 +465,7 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 120.0,
   'daily_sales_estimate': 1.0},
  {'id': 'BV-003',
-  'name': 'Product 019',
+  'name': 'Astroform Vita Soda - Passion Fruit',
   'category': 'Beverages',
   'unit': 'bottle',
   'quantity_on_hand': 6.0,
@@ -470,7 +473,7 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 120.0,
   'daily_sales_estimate': 1.0},
  {'id': 'ED-001',
-  'name': 'Product 020',
+  'name': 'Astroform Gelatine Gummy 4ml - 10 pack (APL & CRY) 20mg',
   'category': 'Edibles',
   'unit': 'unit',
   'quantity_on_hand': 5.0,
@@ -478,7 +481,7 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 240.0,
   'daily_sales_estimate': 1.0},
  {'id': 'ED-002',
-  'name': 'Product 021',
+  'name': 'Astroform Gelatine Gummy 7ml - 8 pack (APL & CRY) 40mg',
   'category': 'Edibles',
   'unit': 'unit',
   'quantity_on_hand': 5.0,
@@ -486,7 +489,7 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 305.0,
   'daily_sales_estimate': 1.0},
  {'id': 'ED-003',
-  'name': 'Product 022',
+  'name': 'Astroform Sugar Free Gelatine Gummy - 10 Pack (strawberry and peach) 20mg',
   'category': 'Edibles',
   'unit': 'unit',
   'quantity_on_hand': 5.0,
@@ -494,7 +497,7 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 240.0,
   'daily_sales_estimate': 1.0},
  {'id': 'ED-004',
-  'name': 'Product 023',
+  'name': 'Astroform Sugar Free Gelatine Gummy - 10 Pack (grape and mango) 40mg',
   'category': 'Edibles',
   'unit': 'unit',
   'quantity_on_hand': 5.0,
@@ -502,7 +505,7 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 305.0,
   'daily_sales_estimate': 1.0},
  {'id': 'ED-005',
-  'name': 'Product 024',
+  'name': 'Astroform Gelatine Gummy 4ml - 10 pack (BLRZ)',
   'category': 'Edibles',
   'unit': 'unit',
   'quantity_on_hand': 5.0,
@@ -510,7 +513,7 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 240.0,
   'daily_sales_estimate': 1.0},
  {'id': 'ED-006',
-  'name': 'Product 025',
+  'name': 'Astroform Gelatine Gummy - 8 pack (PNAP & RASP)',
   'category': 'Edibles',
   'unit': 'unit',
   'quantity_on_hand': 5.0,
@@ -518,7 +521,7 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 305.0,
   'daily_sales_estimate': 1.0},
  {'id': 'ED-007',
-  'name': 'Product 026',
+  'name': '5mg sweethearts',
   'category': 'Edibles',
   'unit': 'unit',
   'quantity_on_hand': 4.0,
@@ -526,7 +529,7 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 200.0,
   'daily_sales_estimate': 1.0},
  {'id': 'ED-008',
-  'name': 'Product 027',
+  'name': '10mg Weedy OHs',
   'category': 'Edibles',
   'unit': 'unit',
   'quantity_on_hand': 4.0,
@@ -534,7 +537,7 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 220.0,
   'daily_sales_estimate': 1.0},
  {'id': 'ED-009',
-  'name': 'Product 028',
+  'name': '25mg Berry Blaze',
   'category': 'Edibles',
   'unit': 'unit',
   'quantity_on_hand': 4.0,
@@ -542,7 +545,7 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 235.0,
   'daily_sales_estimate': 1.0},
  {'id': 'ED-010',
-  'name': 'Product 029',
+  'name': '35mg Vegan Cookies',
   'category': 'Edibles',
   'unit': 'unit',
   'quantity_on_hand': 4.0,
@@ -550,7 +553,7 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 90.0,
   'daily_sales_estimate': 1.0},
  {'id': 'ED-011',
-  'name': 'Product 030',
+  'name': '80mg Chocolate Brownies',
   'category': 'Edibles',
   'unit': 'unit',
   'quantity_on_hand': 3.0,
@@ -558,7 +561,7 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 135.0,
   'daily_sales_estimate': 1.0},
  {'id': 'BV-004',
-  'name': 'Product 031',
+  'name': 'Canna Juice',
   'category': 'Beverages',
   'unit': 'bottle',
   'quantity_on_hand': 3.0,
@@ -566,15 +569,15 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 145.0,
   'daily_sales_estimate': 1.0},
  {'id': 'OT-001',
-  'name': 'Product 032',
+  'name': '50ml Releeze oil for pain',
   'category': 'Oils & Topicals',
   'unit': 'unit',
   'quantity_on_hand': 3.0,
   'opening_quantity': 3.0,
-  'unit_price': 330.0,
+  'unit_price': 325.0,
   'daily_sales_estimate': 1.0},
  {'id': 'OT-002',
-  'name': 'Product 033',
+  'name': 'Massage Oils 100ml sensual and uplifting',
   'category': 'Oils & Topicals',
   'unit': 'unit',
   'quantity_on_hand': 3.0,
@@ -582,15 +585,15 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 380.0,
   'daily_sales_estimate': 1.0},
  {'id': 'OT-003',
-  'name': 'Product 034',
+  'name': 'Thula baby butter',
   'category': 'Oils & Topicals',
   'unit': 'unit',
   'quantity_on_hand': 3.0,
   'opening_quantity': 3.0,
-  'unit_price': 330.0,
+  'unit_price': 325.0,
   'daily_sales_estimate': 1.0},
  {'id': 'OT-004',
-  'name': 'Product 035',
+  'name': '50mg Cannabis Herbal Healing Balm',
   'category': 'Oils & Topicals',
   'unit': 'unit',
   'quantity_on_hand': 3.0,
@@ -598,7 +601,7 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 400.0,
   'daily_sales_estimate': 1.0},
  {'id': 'OT-005',
-  'name': 'Product 036',
+  'name': 'Magnesium Pain Lotion 100g',
   'category': 'Oils & Topicals',
   'unit': 'unit',
   'quantity_on_hand': 3.0,
@@ -606,15 +609,15 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 530.0,
   'daily_sales_estimate': 1.0},
  {'id': 'OT-006',
-  'name': 'Product 037',
+  'name': 'Purple magnesium for body',
   'category': 'Oils & Topicals',
   'unit': 'unit',
   'quantity_on_hand': 3.0,
   'opening_quantity': 3.0,
-  'unit_price': 330.0,
+  'unit_price': 325.0,
   'daily_sales_estimate': 1.0},
  {'id': 'OT-007',
-  'name': 'Product 038',
+  'name': 'Yellow magnesium for underarm/natural deo',
   'category': 'Oils & Topicals',
   'unit': 'unit',
   'quantity_on_hand': 3.0,
@@ -622,7 +625,7 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 235.0,
   'daily_sales_estimate': 1.0},
  {'id': 'OT-008',
-  'name': 'Product 039',
+  'name': '50ml Glo oil for anti aging/wrinkles skin oil',
   'category': 'Oils & Topicals',
   'unit': 'unit',
   'quantity_on_hand': 3.0,
@@ -630,7 +633,7 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 530.0,
   'daily_sales_estimate': 1.0},
  {'id': 'OT-009',
-  'name': 'Product 040',
+  'name': 'Releaze Respiratory Balm',
   'category': 'Oils & Topicals',
   'unit': 'unit',
   'quantity_on_hand': 3.0,
@@ -638,7 +641,7 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 380.0,
   'daily_sales_estimate': 1.0},
  {'id': 'OT-010',
-  'name': 'Product 041',
+  'name': 'Releaze Toxins Balm',
   'category': 'Oils & Topicals',
   'unit': 'unit',
   'quantity_on_hand': 3.0,
@@ -646,31 +649,31 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 380.0,
   'daily_sales_estimate': 1.0},
  {'id': 'SS-001',
-  'name': 'Product 042',
+  'name': 'Supa Sweets',
   'category': 'Sweets / Snacks',
   'unit': 'unit',
   'quantity_on_hand': 125.0,
   'opening_quantity': 125.0,
-  'unit_price': 1835.0,
+  'unit_price': 35.0,
   'daily_sales_estimate': 8.93},
  {'id': 'SS-002',
-  'name': 'Product 043',
+  'name': 'Chocolate',
   'category': 'Sweets / Snacks',
   'unit': 'unit',
   'quantity_on_hand': 50.0,
   'opening_quantity': 50.0,
-  'unit_price': 1835.0,
+  'unit_price': 35.0,
   'daily_sales_estimate': 3.57},
  {'id': 'SS-003',
-  'name': 'Product 044',
+  'name': 'Rainbow Lollies',
   'category': 'Sweets / Snacks',
   'unit': 'unit',
   'quantity_on_hand': 100.0,
   'opening_quantity': 100.0,
-  'unit_price': 3655.0,
+  'unit_price': 55.0,
   'daily_sales_estimate': 7.14},
  {'id': 'SS-004',
-  'name': 'Product 045',
+  'name': 'MRN Syrup Mango 200g',
   'category': 'Sweets / Snacks',
   'unit': 'unit',
   'quantity_on_hand': 2.0,
@@ -678,7 +681,7 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 70.0,
   'daily_sales_estimate': 1.0},
  {'id': 'SS-005',
-  'name': 'Product 046',
+  'name': 'ALZ Honey Plum x 50',
   'category': 'Sweets / Snacks',
   'unit': 'unit',
   'quantity_on_hand': 1.0,
@@ -686,7 +689,7 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 70.0,
   'daily_sales_estimate': 1.0},
  {'id': 'SS-006',
-  'name': 'Product 047',
+  'name': 'CAD Original Milk Chocolate 12 x 12g',
   'category': 'Sweets / Snacks',
   'unit': 'unit',
   'quantity_on_hand': 5.0,
@@ -694,7 +697,7 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 55.0,
   'daily_sales_estimate': 1.0},
  {'id': 'SS-007',
-  'name': 'Product 048',
+  'name': 'Milkit Chew 2in1 Fruity Milk Punch 90g',
   'category': 'Sweets / Snacks',
   'unit': 'unit',
   'quantity_on_hand': 5.0,
@@ -702,7 +705,7 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 40.0,
   'daily_sales_estimate': 1.0},
  {'id': 'SS-008',
-  'name': 'Product 049',
+  'name': 'MRS Jelly Babies x 135g',
   'category': 'Sweets / Snacks',
   'unit': 'unit',
   'quantity_on_hand': 2.0,
@@ -710,7 +713,7 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 55.0,
   'daily_sales_estimate': 1.0},
  {'id': 'AO-001',
-  'name': 'Product 050',
+  'name': 'MRS Juicy Jellies x 128g',
   'category': 'Accessories / Other',
   'unit': 'unit',
   'quantity_on_hand': 4.0,
@@ -718,7 +721,7 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 55.0,
   'daily_sales_estimate': 1.0},
  {'id': 'SS-009',
-  'name': 'Product 051',
+  'name': 'MRS Jelly Beans x 128g',
   'category': 'Sweets / Snacks',
   'unit': 'unit',
   'quantity_on_hand': 4.0,
@@ -726,7 +729,7 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 55.0,
   'daily_sales_estimate': 1.0},
  {'id': 'SS-010',
-  'name': 'Product 052',
+  'name': 'ALZ BIFA KEKS Mini Cherry x 10',
   'category': 'Sweets / Snacks',
   'unit': 'unit',
   'quantity_on_hand': 1.0,
@@ -734,7 +737,7 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 50.0,
   'daily_sales_estimate': 1.0},
  {'id': 'SS-011',
-  'name': 'Product 053',
+  'name': 'ALZ BIFA KEKS Mini Banana x 10',
   'category': 'Sweets / Snacks',
   'unit': 'unit',
   'quantity_on_hand': 1.0,
@@ -742,7 +745,7 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 50.0,
   'daily_sales_estimate': 1.0},
  {'id': 'SS-012',
-  'name': 'Product 054',
+  'name': 'LKS Syrup Packets',
   'category': 'Sweets / Snacks',
   'unit': 'unit',
   'quantity_on_hand': 5.0,
@@ -750,31 +753,31 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 70.0,
   'daily_sales_estimate': 1.0},
  {'id': 'SS-013',
-  'name': 'Product 055',
+  'name': 'ALZ Biscolata Minis x 11g',
   'category': 'Sweets / Snacks',
   'unit': 'unit',
   'quantity_on_hand': 3.0,
   'opening_quantity': 3.0,
-  'unit_price': 80.0,
+  'unit_price': 85.0,
   'daily_sales_estimate': 1.0},
  {'id': 'SS-014',
-  'name': 'Product 056',
+  'name': 'Yogueta Pin Pop Passion Fruit x 48',
   'category': 'Sweets / Snacks',
   'unit': 'unit',
   'quantity_on_hand': 1.0,
   'opening_quantity': 1.0,
-  'unit_price': 90.0,
+  'unit_price': 20.0,
   'daily_sales_estimate': 1.0},
  {'id': 'SS-015',
-  'name': 'Product 057',
+  'name': 'Yogueta Pin Pop Sour x 48',
   'category': 'Sweets / Snacks',
   'unit': 'unit',
   'quantity_on_hand': 1.0,
   'opening_quantity': 1.0,
-  'unit_price': 90.0,
+  'unit_price': 20.0,
   'daily_sales_estimate': 1.0},
  {'id': 'SS-016',
-  'name': 'Product 058',
+  'name': 'TAM Sour Watermelon Slices 113g',
   'category': 'Sweets / Snacks',
   'unit': 'unit',
   'quantity_on_hand': 5.0,
@@ -782,7 +785,7 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 40.0,
   'daily_sales_estimate': 1.0},
  {'id': 'SS-017',
-  'name': 'Product 059',
+  'name': 'TAM Sour Cola Bottles 113g',
   'category': 'Sweets / Snacks',
   'unit': 'unit',
   'quantity_on_hand': 5.0,
@@ -790,31 +793,31 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 40.0,
   'daily_sales_estimate': 1.0},
  {'id': 'SS-018',
-  'name': 'Product 060',
+  'name': 'Nestle Bar One Mini 24 x 21g',
   'category': 'Sweets / Snacks',
   'unit': 'unit',
   'quantity_on_hand': 1.0,
   'opening_quantity': 1.0,
-  'unit_price': 180.0,
+  'unit_price': 25.0,
   'daily_sales_estimate': 1.0},
  {'id': 'SS-019',
-  'name': 'Product 061',
+  'name': 'Nestle Tex Mini 24 x 18g',
   'category': 'Sweets / Snacks',
   'unit': 'unit',
   'quantity_on_hand': 1.0,
   'opening_quantity': 1.0,
-  'unit_price': 180.0,
+  'unit_price': 25.0,
   'daily_sales_estimate': 1.0},
  {'id': 'SS-020',
-  'name': 'Product 062',
+  'name': 'Nestle Kit Kat Mini 2 Finger 24 x 20g',
   'category': 'Sweets / Snacks',
   'unit': 'unit',
   'quantity_on_hand': 1.0,
   'opening_quantity': 1.0,
-  'unit_price': 180.0,
+  'unit_price': 25.0,
   'daily_sales_estimate': 1.0},
  {'id': 'SS-021',
-  'name': 'Product 063',
+  'name': 'Skittles Fruits 14 x 38g',
   'category': 'Sweets / Snacks',
   'unit': 'unit',
   'quantity_on_hand': 1.0,
@@ -822,11 +825,11 @@ def default_inventory() -> List[Dict[str, Any]]:
   'unit_price': 255.0,
   'daily_sales_estimate': 1.0},
  {'id': 'AO-002',
-  'name': 'Product 064',
+  'name': 'Specials - Dogwalker (Pre Rolls)',
   'category': 'Accessories / Other',
   'unit': 'unit',
-  'quantity_on_hand': 10.0,
-  'opening_quantity': 10.0,
+  'quantity_on_hand': 9.0,
+  'opening_quantity': 9.0,
   'unit_price': 150.0,
   'daily_sales_estimate': 1.0}]
 
@@ -886,8 +889,14 @@ def is_legacy_demo_inventory(data: Any) -> bool:
         "Premium Grinder",
         "Refillable Lighter",
     }
+
     names = {str(row.get("name", "")).strip() for row in data if isinstance(row, dict)}
-    return bool(names & legacy_names)
+
+    # Also replace the temporary Product 001 / Product 002 placeholder seed
+    # with the real go-live stock list from the latest Saint Herb pricing sheet.
+    placeholder_count = sum(1 for name in names if name.startswith("Product "))
+
+    return bool(names & legacy_names) or placeholder_count >= 10
 
 
 def load_inventory() -> pd.DataFrame:
@@ -896,7 +905,7 @@ def load_inventory() -> pd.DataFrame:
     if is_legacy_demo_inventory(data):
         data = default_inventory()
         save_json(INVENTORY_FILE, data)
-        st.toast("Live stock list loaded. Old demo inventory was replaced.", icon="✅")
+        st.toast("Go-live stock list loaded. Old placeholder inventory was replaced.", icon="✅")
 
     df = pd.DataFrame(data)
 
@@ -933,8 +942,54 @@ def save_inventory(df: pd.DataFrame) -> None:
     save_json(INVENTORY_FILE, clean_df.to_dict(orient="records"))
 
 
+def is_legacy_demo_sales(data: Any) -> bool:
+    """
+    Detects old sample/demo sales from the first prototype.
+    This keeps the live go-live view clean so the system starts with R0.00 sales.
+    It will not clear genuine live sales created from the current Product 001+ stock list.
+    """
+    if not isinstance(data, list) or not data:
+        return False
+
+    legacy_names = {
+        "Purple Punch Pre-Roll",
+        "Gelato Pre-Roll",
+        "Blue Dream Pre-Roll",
+        "Wedding Cake Pre-Roll",
+        "Runtz Pre-Roll",
+        "Purple Punch Flower",
+        "Gelato Flower",
+        "Blue Dream Flower",
+        "Wedding Cake Flower",
+        "Runtz Flower",
+        "Rolling Papers Classic",
+        "Canna Juice Berry",
+        "Canna Juice Citrus",
+        "Premium Grinder",
+        "Refillable Lighter",
+    }
+
+    for sale in data:
+        if not isinstance(sale, dict):
+            continue
+        for item in sale.get("items", []):
+            item_name = str(item.get("name", "")).strip()
+            if item_name in legacy_names:
+                return True
+            if item_name.startswith("Product "):
+                return True
+    return False
+
+
 def load_sales() -> List[Dict[str, Any]]:
-    return load_json(SALES_FILE, default_sales())
+    data = load_json(SALES_FILE, default_sales())
+
+    if is_legacy_demo_sales(data):
+        data = []
+        save_json(SALES_FILE, data)
+        st.toast("Old demo sales were cleared. Live sales now start from zero.", icon="✅")
+
+    return data
 
 
 def save_sales(sales: List[Dict[str, Any]]) -> None:
@@ -1038,25 +1093,35 @@ def sale_items_to_dataframe(sales: List[Dict[str, Any]]) -> pd.DataFrame:
 
 def stock_valuation_summary(inventory: pd.DataFrame, sales: List[Dict[str, Any]]) -> Dict[str, float]:
     """
-    Opening Stock Value = value loaded at the start of the live period.
-    Sales Value = logged sales value.
-    Value Balance = Opening Stock Value less logged sales.
-    Current Stock Value = value of the remaining quantity on hand.
+    Stock valuation rules for the live-lite version:
+
+    - When no sales have been logged yet, the only meaningful money value is
+      the Total Stock Value.
+    - Once sales start, the app also shows:
+        * Total Sales Value
+        * Value Balance = Opening Stock Value less logged sales
+        * Current Stock Value = remaining stock on hand at current selling price
     """
     opening_stock_value = float(inventory["opening_stock_value"].sum()) if "opening_stock_value" in inventory.columns else 0.0
     current_stock_value = float(inventory["stock_value"].sum()) if "stock_value" in inventory.columns else 0.0
     total_sales_value = float(sum(float(sale.get("total", 0.0)) for sale in sales))
+
     today_sales_value = 0.0
+    sales_count_today = 0
     for sale in sales:
         if str(sale.get("timestamp", ""))[:10] == today_string():
             today_sales_value += float(sale.get("total", 0.0))
+            sales_count_today += 1
 
     return {
         "opening_stock_value": opening_stock_value,
         "current_stock_value": current_stock_value,
         "total_sales_value": total_sales_value,
         "today_sales_value": today_sales_value,
+        "sales_count": len(sales),
+        "sales_count_today": sales_count_today,
         "value_balance_less_sales": opening_stock_value - total_sales_value,
+        "has_sales": total_sales_value > 0 or len(sales) > 0,
     }
 
 
@@ -1107,32 +1172,43 @@ def page_dashboard(inventory: pd.DataFrame, sales: List[Dict[str, Any]]) -> None
 
     sales_df = sales_to_dataframe(sales)
     items_df = sale_items_to_dataframe(sales)
-
     valuation = stock_valuation_summary(inventory, sales)
-    total_stock_value = valuation["opening_stock_value"]
-    current_stock_value = valuation["current_stock_value"]
-    today_sales = valuation["today_sales_value"]
-    value_balance = valuation["value_balance_less_sales"]
 
+    total_stock_value = valuation["current_stock_value"]
     low_stock_items = int((inventory["status"] == "Low").sum())
     avg_days = inventory["days_stock_on_hand"].replace(999, pd.NA).dropna().mean()
     avg_days = 0 if pd.isna(avg_days) else avg_days
 
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        metric_card("Opening Stock Value", money(total_stock_value), "Loaded stock value before sales")
-    with col2:
-        metric_card("Today's Sales", money(today_sales), f"Sales date: {today_string()}")
-    with col3:
-        metric_card("Value Balance", money(value_balance), "Opening stock value less all logged sales")
-    with col4:
-        metric_card("Current Stock Value", money(current_stock_value), "Live value after stock deductions")
+    if not valuation["has_sales"]:
+        # Clean go-live view: no sales yet, so show only one money amount.
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            metric_card("Total Stock Value", money(total_stock_value), "Current value of all stock loaded")
+        with col2:
+            metric_card("Sales Count", "0", "No sales have been logged yet")
+        with col3:
+            metric_card("Low Stock Items", str(low_stock_items), "Items with fewer than 10 days on hand")
+        with col4:
+            metric_card("Avg Days on Hand", f"{avg_days:,.1f}", "Based on daily sales estimates")
+    else:
+        # Once trading starts, show the full sales/stock movement picture.
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            metric_card("Opening Stock Value", money(valuation["opening_stock_value"]), "Loaded stock value before sales")
+        with col2:
+            metric_card("Total Sales", money(valuation["total_sales_value"]), "All logged sales")
+        with col3:
+            metric_card("Value Balance", money(valuation["value_balance_less_sales"]), "Opening stock value less logged sales")
+        with col4:
+            metric_card("Current Stock Value", money(valuation["current_stock_value"]), "Remaining stock value after deductions")
 
-    col5, col6 = st.columns(2)
-    with col5:
-        metric_card("Low Stock Items", str(low_stock_items), "Items with fewer than 10 days on hand")
-    with col6:
-        metric_card("Avg Days on Hand", f"{avg_days:,.1f}", "Based on daily sales estimates")
+        col5, col6, col7 = st.columns(3)
+        with col5:
+            metric_card("Today's Sales", money(valuation["today_sales_value"]), f"Sales date: {today_string()}")
+        with col6:
+            metric_card("Low Stock Items", str(low_stock_items), "Items with fewer than 10 days on hand")
+        with col7:
+            metric_card("Avg Days on Hand", f"{avg_days:,.1f}", "Based on daily sales estimates")
 
     st.divider()
 
@@ -1156,6 +1232,7 @@ def page_dashboard(inventory: pd.DataFrame, sales: List[Dict[str, Any]]) -> None
         if sales_df.empty:
             st.info("No sales have been logged yet.")
         else:
+            sales_df["Date"] = pd.to_datetime(sales_df["Timestamp"], errors="coerce").dt.date
             daily_sales = sales_df.groupby("Date", as_index=False)["Total (R)"].sum()
             fig = px.line(
                 daily_sales,
@@ -1198,6 +1275,11 @@ def page_dashboard(inventory: pd.DataFrame, sales: List[Dict[str, Any]]) -> None
 def add_to_cart(product: pd.Series, quantity: float) -> None:
     if quantity <= 0:
         st.toast("Quantity must be greater than zero.", icon="⚠️")
+        return
+
+    unit_price = float(product["unit_price"])
+    if unit_price <= 0:
+        st.toast("This product has no selling price yet. Update the price in Inventory before selling.", icon="⚠️")
         return
 
     product_id = str(product["id"])
@@ -1438,13 +1520,25 @@ def page_inventory(inventory: pd.DataFrame) -> None:
     )
 
     valuation = stock_valuation_summary(inventory, load_sales())
-    cval1, cval2, cval3 = st.columns(3)
-    with cval1:
-        metric_card("Opening Stock Value", money(valuation["opening_stock_value"]), "Loaded stock value before sales")
-    with cval2:
-        metric_card("Current Stock Value", money(valuation["current_stock_value"]), "Live stock value after sales")
-    with cval3:
-        metric_card("Value Balance", money(valuation["value_balance_less_sales"]), "Opening stock value less logged sales")
+
+    if not valuation["has_sales"]:
+        cval1, cval2, cval3 = st.columns(3)
+        with cval1:
+            metric_card("Total Stock Value", money(valuation["current_stock_value"]), "Current value of all stock loaded")
+        with cval2:
+            metric_card("Sales Count", "0", "No sales have been logged yet")
+        with cval3:
+            metric_card("Products Loaded", f"{len(inventory):,}", "Current number of products in inventory")
+    else:
+        cval1, cval2, cval3, cval4 = st.columns(4)
+        with cval1:
+            metric_card("Opening Stock Value", money(valuation["opening_stock_value"]), "Loaded stock value before sales")
+        with cval2:
+            metric_card("Total Sales", money(valuation["total_sales_value"]), "All logged sales")
+        with cval3:
+            metric_card("Value Balance", money(valuation["value_balance_less_sales"]), "Opening stock value less logged sales")
+        with cval4:
+            metric_card("Current Stock Value", money(valuation["current_stock_value"]), "Live stock value after sales")
 
     st.divider()
 
@@ -1800,7 +1894,7 @@ def main() -> None:
         st.write(f"Cart total: **{money(cart_total())}**")
 
         st.divider()
-        st.caption("Lite live build. Save a backup at the end of each trading day.")
+        st.caption("Go-live lite build. Save a backup at the end of each trading day.")
 
     if page == "Dashboard":
         page_dashboard(inventory, sales)
