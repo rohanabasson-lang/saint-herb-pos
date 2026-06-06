@@ -12,17 +12,19 @@ How to run locally
 
 Notes
 -----
-- This demo uses neutral placeholder products for development.
+- This lite live version uses local JSON files as a temporary lightweight database.
 - Inventory and sales persist to local JSON files in the same folder:
   - saint_herb_inventory.json
   - saint_herb_sales.json
-- Use "Reset Demo Data" in Settings to reload the sample data.
+- Use the backup buttons daily while the full database upgrade is pending.
 """
 
 from __future__ import annotations
 
 import json
 import uuid
+import io
+import zipfile
 from datetime import datetime, date, timedelta
 from pathlib import Path
 from typing import Dict, List, Any
@@ -47,7 +49,7 @@ APP_NAME = "Saint Herb"
 INVENTORY_FILE = Path("saint_herb_inventory.json")
 SALES_FILE = Path("saint_herb_sales.json")
 
-CATEGORIES = ["Pre-Rolls", "Flower / Bud", "Accessories"]
+CATEGORIES = ["Pre-Rolls", "Flower / Bud", "Edibles", "Beverages", "Oils & Topicals", "Sweets / Snacks", "Accessories / Other"]
 UNITS = ["gram", "unit", "pack", "bottle"]
 PAYMENT_METHODS = ["Cash", "Card", "EFT", "Other"]
 
@@ -293,11 +295,16 @@ def status_html(status: str) -> str:
 
 
 def icon_for_category(category: str) -> str:
-    if category == "Pre-Rolls":
-        return "◼"
-    if category == "Flower / Bud":
-        return "◆"
-    return "●"
+    icons = {
+        "Pre-Rolls": "◼",
+        "Flower / Bud": "◆",
+        "Edibles": "⬢",
+        "Beverages": "●",
+        "Oils & Topicals": "◈",
+        "Sweets / Snacks": "■",
+        "Accessories / Other": "◇",
+    }
+    return icons.get(category, "●")
 
 
 # ============================================================
@@ -305,74 +312,528 @@ def icon_for_category(category: str) -> str:
 # ============================================================
 
 def default_inventory() -> List[Dict[str, Any]]:
-    return [
-        # Neutral placeholder names. Replace later with real licensed product names.
-        {"id": "PR-001", "name": "Purple Punch Pre-Roll", "category": "Pre-Rolls", "unit": "gram", "quantity_on_hand": 420.0, "unit_price": 28.0, "daily_sales_estimate": 12.0},
-        {"id": "PR-002", "name": "Gelato Pre-Roll", "category": "Pre-Rolls", "unit": "gram", "quantity_on_hand": 350.0, "unit_price": 32.0, "daily_sales_estimate": 14.0},
-        {"id": "PR-003", "name": "Blue Dream Pre-Roll", "category": "Pre-Rolls", "unit": "gram", "quantity_on_hand": 260.0, "unit_price": 25.0, "daily_sales_estimate": 11.0},
-        {"id": "PR-004", "name": "Wedding Cake Pre-Roll", "category": "Pre-Rolls", "unit": "gram", "quantity_on_hand": 180.0, "unit_price": 35.0, "daily_sales_estimate": 10.0},
-        {"id": "PR-005", "name": "Runtz Pre-Roll", "category": "Pre-Rolls", "unit": "gram", "quantity_on_hand": 85.0, "unit_price": 30.0, "daily_sales_estimate": 12.0},
-
-        {"id": "FL-001", "name": "Purple Punch Flower", "category": "Flower / Bud", "unit": "gram", "quantity_on_hand": 720.0, "unit_price": 18.0, "daily_sales_estimate": 18.0},
-        {"id": "FL-002", "name": "Gelato Flower", "category": "Flower / Bud", "unit": "gram", "quantity_on_hand": 610.0, "unit_price": 22.0, "daily_sales_estimate": 16.0},
-        {"id": "FL-003", "name": "Blue Dream Flower", "category": "Flower / Bud", "unit": "gram", "quantity_on_hand": 490.0, "unit_price": 16.0, "daily_sales_estimate": 17.0},
-        {"id": "FL-004", "name": "Wedding Cake Flower", "category": "Flower / Bud", "unit": "gram", "quantity_on_hand": 310.0, "unit_price": 24.0, "daily_sales_estimate": 14.0},
-        {"id": "FL-005", "name": "Runtz Flower", "category": "Flower / Bud", "unit": "gram", "quantity_on_hand": 145.0, "unit_price": 20.0, "daily_sales_estimate": 15.0},
-
-        {"id": "AC-001", "name": "Rolling Papers Classic", "category": "Accessories", "unit": "pack", "quantity_on_hand": 180.0, "unit_price": 25.0, "daily_sales_estimate": 5.0},
-        {"id": "AC-002", "name": "Canna Juice Berry", "category": "Accessories", "unit": "bottle", "quantity_on_hand": 65.0, "unit_price": 45.0, "daily_sales_estimate": 4.0},
-        {"id": "AC-003", "name": "Canna Juice Citrus", "category": "Accessories", "unit": "bottle", "quantity_on_hand": 52.0, "unit_price": 45.0, "daily_sales_estimate": 4.0},
-        {"id": "AC-004", "name": "Premium Grinder", "category": "Accessories", "unit": "unit", "quantity_on_hand": 28.0, "unit_price": 135.0, "daily_sales_estimate": 1.0},
-        {"id": "AC-005", "name": "Refillable Lighter", "category": "Accessories", "unit": "unit", "quantity_on_hand": 95.0, "unit_price": 18.0, "daily_sales_estimate": 3.0},
-    ]
+    """
+    Initial stock loaded from the client's pricing sheet structure, using neutral product labels.
+    The licensed adult/store owner can update Product 001, Product 002, etc. to final display names
+    inside the Inventory editor before trading.
+    """
+    return [{'id': 'PR-001',
+  'name': 'Product 001',
+  'category': 'Pre-Rolls',
+  'unit': 'unit',
+  'quantity_on_hand': 25.0,
+  'opening_quantity': 25.0,
+  'unit_price': 120.0,
+  'daily_sales_estimate': 1.79},
+ {'id': 'PR-002',
+  'name': 'Product 002',
+  'category': 'Pre-Rolls',
+  'unit': 'unit',
+  'quantity_on_hand': 25.0,
+  'opening_quantity': 25.0,
+  'unit_price': 120.0,
+  'daily_sales_estimate': 1.79},
+ {'id': 'PR-003',
+  'name': 'Product 003',
+  'category': 'Pre-Rolls',
+  'unit': 'unit',
+  'quantity_on_hand': 25.0,
+  'opening_quantity': 25.0,
+  'unit_price': 60.0,
+  'daily_sales_estimate': 1.79},
+ {'id': 'PR-004',
+  'name': 'Product 004',
+  'category': 'Pre-Rolls',
+  'unit': 'unit',
+  'quantity_on_hand': 25.0,
+  'opening_quantity': 25.0,
+  'unit_price': 60.0,
+  'daily_sales_estimate': 1.79},
+ {'id': 'PR-005',
+  'name': 'Product 005',
+  'category': 'Pre-Rolls',
+  'unit': 'unit',
+  'quantity_on_hand': 25.0,
+  'opening_quantity': 25.0,
+  'unit_price': 65.0,
+  'daily_sales_estimate': 1.79},
+ {'id': 'PR-006',
+  'name': 'Product 006',
+  'category': 'Pre-Rolls',
+  'unit': 'unit',
+  'quantity_on_hand': 21.0,
+  'opening_quantity': 21.0,
+  'unit_price': 45.0,
+  'daily_sales_estimate': 1.5},
+ {'id': 'PR-007',
+  'name': 'Product 007',
+  'category': 'Pre-Rolls',
+  'unit': 'unit',
+  'quantity_on_hand': 28.0,
+  'opening_quantity': 28.0,
+  'unit_price': 45.0,
+  'daily_sales_estimate': 2.0},
+ {'id': 'PR-008',
+  'name': 'Product 008',
+  'category': 'Pre-Rolls',
+  'unit': 'unit',
+  'quantity_on_hand': 31.0,
+  'opening_quantity': 31.0,
+  'unit_price': 45.0,
+  'daily_sales_estimate': 2.21},
+ {'id': 'FL-001',
+  'name': 'Product 009',
+  'category': 'Flower / Bud',
+  'unit': 'gram',
+  'quantity_on_hand': 10.0,
+  'opening_quantity': 10.0,
+  'unit_price': 50.0,
+  'daily_sales_estimate': 1.0},
+ {'id': 'FL-002',
+  'name': 'Product 010',
+  'category': 'Flower / Bud',
+  'unit': 'gram',
+  'quantity_on_hand': 50.0,
+  'opening_quantity': 50.0,
+  'unit_price': 100.0,
+  'daily_sales_estimate': 3.57},
+ {'id': 'FL-003',
+  'name': 'Product 011',
+  'category': 'Flower / Bud',
+  'unit': 'gram',
+  'quantity_on_hand': 50.0,
+  'opening_quantity': 50.0,
+  'unit_price': 110.0,
+  'daily_sales_estimate': 3.57},
+ {'id': 'FL-004',
+  'name': 'Product 012',
+  'category': 'Flower / Bud',
+  'unit': 'gram',
+  'quantity_on_hand': 50.0,
+  'opening_quantity': 50.0,
+  'unit_price': 135.0,
+  'daily_sales_estimate': 3.57},
+ {'id': 'FL-005',
+  'name': 'Product 013',
+  'category': 'Flower / Bud',
+  'unit': 'gram',
+  'quantity_on_hand': 50.0,
+  'opening_quantity': 50.0,
+  'unit_price': 120.0,
+  'daily_sales_estimate': 3.57},
+ {'id': 'FL-006',
+  'name': 'Product 014',
+  'category': 'Flower / Bud',
+  'unit': 'gram',
+  'quantity_on_hand': 130.0,
+  'opening_quantity': 130.0,
+  'unit_price': 140.0,
+  'daily_sales_estimate': 9.29},
+ {'id': 'FL-007',
+  'name': 'Product 015',
+  'category': 'Flower / Bud',
+  'unit': 'gram',
+  'quantity_on_hand': 130.0,
+  'opening_quantity': 130.0,
+  'unit_price': 140.0,
+  'daily_sales_estimate': 9.29},
+ {'id': 'FL-008',
+  'name': 'Product 016',
+  'category': 'Flower / Bud',
+  'unit': 'gram',
+  'quantity_on_hand': 130.0,
+  'opening_quantity': 130.0,
+  'unit_price': 140.0,
+  'daily_sales_estimate': 9.29},
+ {'id': 'BV-001',
+  'name': 'Product 017',
+  'category': 'Beverages',
+  'unit': 'bottle',
+  'quantity_on_hand': 6.0,
+  'opening_quantity': 6.0,
+  'unit_price': 120.0,
+  'daily_sales_estimate': 1.0},
+ {'id': 'BV-002',
+  'name': 'Product 018',
+  'category': 'Beverages',
+  'unit': 'bottle',
+  'quantity_on_hand': 6.0,
+  'opening_quantity': 6.0,
+  'unit_price': 120.0,
+  'daily_sales_estimate': 1.0},
+ {'id': 'BV-003',
+  'name': 'Product 019',
+  'category': 'Beverages',
+  'unit': 'bottle',
+  'quantity_on_hand': 6.0,
+  'opening_quantity': 6.0,
+  'unit_price': 120.0,
+  'daily_sales_estimate': 1.0},
+ {'id': 'ED-001',
+  'name': 'Product 020',
+  'category': 'Edibles',
+  'unit': 'unit',
+  'quantity_on_hand': 5.0,
+  'opening_quantity': 5.0,
+  'unit_price': 240.0,
+  'daily_sales_estimate': 1.0},
+ {'id': 'ED-002',
+  'name': 'Product 021',
+  'category': 'Edibles',
+  'unit': 'unit',
+  'quantity_on_hand': 5.0,
+  'opening_quantity': 5.0,
+  'unit_price': 305.0,
+  'daily_sales_estimate': 1.0},
+ {'id': 'ED-003',
+  'name': 'Product 022',
+  'category': 'Edibles',
+  'unit': 'unit',
+  'quantity_on_hand': 5.0,
+  'opening_quantity': 5.0,
+  'unit_price': 240.0,
+  'daily_sales_estimate': 1.0},
+ {'id': 'ED-004',
+  'name': 'Product 023',
+  'category': 'Edibles',
+  'unit': 'unit',
+  'quantity_on_hand': 5.0,
+  'opening_quantity': 5.0,
+  'unit_price': 305.0,
+  'daily_sales_estimate': 1.0},
+ {'id': 'ED-005',
+  'name': 'Product 024',
+  'category': 'Edibles',
+  'unit': 'unit',
+  'quantity_on_hand': 5.0,
+  'opening_quantity': 5.0,
+  'unit_price': 240.0,
+  'daily_sales_estimate': 1.0},
+ {'id': 'ED-006',
+  'name': 'Product 025',
+  'category': 'Edibles',
+  'unit': 'unit',
+  'quantity_on_hand': 5.0,
+  'opening_quantity': 5.0,
+  'unit_price': 305.0,
+  'daily_sales_estimate': 1.0},
+ {'id': 'ED-007',
+  'name': 'Product 026',
+  'category': 'Edibles',
+  'unit': 'unit',
+  'quantity_on_hand': 4.0,
+  'opening_quantity': 4.0,
+  'unit_price': 200.0,
+  'daily_sales_estimate': 1.0},
+ {'id': 'ED-008',
+  'name': 'Product 027',
+  'category': 'Edibles',
+  'unit': 'unit',
+  'quantity_on_hand': 4.0,
+  'opening_quantity': 4.0,
+  'unit_price': 220.0,
+  'daily_sales_estimate': 1.0},
+ {'id': 'ED-009',
+  'name': 'Product 028',
+  'category': 'Edibles',
+  'unit': 'unit',
+  'quantity_on_hand': 4.0,
+  'opening_quantity': 4.0,
+  'unit_price': 235.0,
+  'daily_sales_estimate': 1.0},
+ {'id': 'ED-010',
+  'name': 'Product 029',
+  'category': 'Edibles',
+  'unit': 'unit',
+  'quantity_on_hand': 4.0,
+  'opening_quantity': 4.0,
+  'unit_price': 90.0,
+  'daily_sales_estimate': 1.0},
+ {'id': 'ED-011',
+  'name': 'Product 030',
+  'category': 'Edibles',
+  'unit': 'unit',
+  'quantity_on_hand': 3.0,
+  'opening_quantity': 3.0,
+  'unit_price': 135.0,
+  'daily_sales_estimate': 1.0},
+ {'id': 'BV-004',
+  'name': 'Product 031',
+  'category': 'Beverages',
+  'unit': 'bottle',
+  'quantity_on_hand': 3.0,
+  'opening_quantity': 3.0,
+  'unit_price': 145.0,
+  'daily_sales_estimate': 1.0},
+ {'id': 'OT-001',
+  'name': 'Product 032',
+  'category': 'Oils & Topicals',
+  'unit': 'unit',
+  'quantity_on_hand': 3.0,
+  'opening_quantity': 3.0,
+  'unit_price': 330.0,
+  'daily_sales_estimate': 1.0},
+ {'id': 'OT-002',
+  'name': 'Product 033',
+  'category': 'Oils & Topicals',
+  'unit': 'unit',
+  'quantity_on_hand': 3.0,
+  'opening_quantity': 3.0,
+  'unit_price': 380.0,
+  'daily_sales_estimate': 1.0},
+ {'id': 'OT-003',
+  'name': 'Product 034',
+  'category': 'Oils & Topicals',
+  'unit': 'unit',
+  'quantity_on_hand': 3.0,
+  'opening_quantity': 3.0,
+  'unit_price': 330.0,
+  'daily_sales_estimate': 1.0},
+ {'id': 'OT-004',
+  'name': 'Product 035',
+  'category': 'Oils & Topicals',
+  'unit': 'unit',
+  'quantity_on_hand': 3.0,
+  'opening_quantity': 3.0,
+  'unit_price': 400.0,
+  'daily_sales_estimate': 1.0},
+ {'id': 'OT-005',
+  'name': 'Product 036',
+  'category': 'Oils & Topicals',
+  'unit': 'unit',
+  'quantity_on_hand': 3.0,
+  'opening_quantity': 3.0,
+  'unit_price': 530.0,
+  'daily_sales_estimate': 1.0},
+ {'id': 'OT-006',
+  'name': 'Product 037',
+  'category': 'Oils & Topicals',
+  'unit': 'unit',
+  'quantity_on_hand': 3.0,
+  'opening_quantity': 3.0,
+  'unit_price': 330.0,
+  'daily_sales_estimate': 1.0},
+ {'id': 'OT-007',
+  'name': 'Product 038',
+  'category': 'Oils & Topicals',
+  'unit': 'unit',
+  'quantity_on_hand': 3.0,
+  'opening_quantity': 3.0,
+  'unit_price': 235.0,
+  'daily_sales_estimate': 1.0},
+ {'id': 'OT-008',
+  'name': 'Product 039',
+  'category': 'Oils & Topicals',
+  'unit': 'unit',
+  'quantity_on_hand': 3.0,
+  'opening_quantity': 3.0,
+  'unit_price': 530.0,
+  'daily_sales_estimate': 1.0},
+ {'id': 'OT-009',
+  'name': 'Product 040',
+  'category': 'Oils & Topicals',
+  'unit': 'unit',
+  'quantity_on_hand': 3.0,
+  'opening_quantity': 3.0,
+  'unit_price': 380.0,
+  'daily_sales_estimate': 1.0},
+ {'id': 'OT-010',
+  'name': 'Product 041',
+  'category': 'Oils & Topicals',
+  'unit': 'unit',
+  'quantity_on_hand': 3.0,
+  'opening_quantity': 3.0,
+  'unit_price': 380.0,
+  'daily_sales_estimate': 1.0},
+ {'id': 'SS-001',
+  'name': 'Product 042',
+  'category': 'Sweets / Snacks',
+  'unit': 'unit',
+  'quantity_on_hand': 125.0,
+  'opening_quantity': 125.0,
+  'unit_price': 1835.0,
+  'daily_sales_estimate': 8.93},
+ {'id': 'SS-002',
+  'name': 'Product 043',
+  'category': 'Sweets / Snacks',
+  'unit': 'unit',
+  'quantity_on_hand': 50.0,
+  'opening_quantity': 50.0,
+  'unit_price': 1835.0,
+  'daily_sales_estimate': 3.57},
+ {'id': 'SS-003',
+  'name': 'Product 044',
+  'category': 'Sweets / Snacks',
+  'unit': 'unit',
+  'quantity_on_hand': 100.0,
+  'opening_quantity': 100.0,
+  'unit_price': 3655.0,
+  'daily_sales_estimate': 7.14},
+ {'id': 'SS-004',
+  'name': 'Product 045',
+  'category': 'Sweets / Snacks',
+  'unit': 'unit',
+  'quantity_on_hand': 2.0,
+  'opening_quantity': 2.0,
+  'unit_price': 70.0,
+  'daily_sales_estimate': 1.0},
+ {'id': 'SS-005',
+  'name': 'Product 046',
+  'category': 'Sweets / Snacks',
+  'unit': 'unit',
+  'quantity_on_hand': 1.0,
+  'opening_quantity': 1.0,
+  'unit_price': 70.0,
+  'daily_sales_estimate': 1.0},
+ {'id': 'SS-006',
+  'name': 'Product 047',
+  'category': 'Sweets / Snacks',
+  'unit': 'unit',
+  'quantity_on_hand': 5.0,
+  'opening_quantity': 5.0,
+  'unit_price': 55.0,
+  'daily_sales_estimate': 1.0},
+ {'id': 'SS-007',
+  'name': 'Product 048',
+  'category': 'Sweets / Snacks',
+  'unit': 'unit',
+  'quantity_on_hand': 5.0,
+  'opening_quantity': 5.0,
+  'unit_price': 40.0,
+  'daily_sales_estimate': 1.0},
+ {'id': 'SS-008',
+  'name': 'Product 049',
+  'category': 'Sweets / Snacks',
+  'unit': 'unit',
+  'quantity_on_hand': 2.0,
+  'opening_quantity': 2.0,
+  'unit_price': 55.0,
+  'daily_sales_estimate': 1.0},
+ {'id': 'AO-001',
+  'name': 'Product 050',
+  'category': 'Accessories / Other',
+  'unit': 'unit',
+  'quantity_on_hand': 4.0,
+  'opening_quantity': 4.0,
+  'unit_price': 55.0,
+  'daily_sales_estimate': 1.0},
+ {'id': 'SS-009',
+  'name': 'Product 051',
+  'category': 'Sweets / Snacks',
+  'unit': 'unit',
+  'quantity_on_hand': 4.0,
+  'opening_quantity': 4.0,
+  'unit_price': 55.0,
+  'daily_sales_estimate': 1.0},
+ {'id': 'SS-010',
+  'name': 'Product 052',
+  'category': 'Sweets / Snacks',
+  'unit': 'unit',
+  'quantity_on_hand': 1.0,
+  'opening_quantity': 1.0,
+  'unit_price': 50.0,
+  'daily_sales_estimate': 1.0},
+ {'id': 'SS-011',
+  'name': 'Product 053',
+  'category': 'Sweets / Snacks',
+  'unit': 'unit',
+  'quantity_on_hand': 1.0,
+  'opening_quantity': 1.0,
+  'unit_price': 50.0,
+  'daily_sales_estimate': 1.0},
+ {'id': 'SS-012',
+  'name': 'Product 054',
+  'category': 'Sweets / Snacks',
+  'unit': 'unit',
+  'quantity_on_hand': 5.0,
+  'opening_quantity': 5.0,
+  'unit_price': 70.0,
+  'daily_sales_estimate': 1.0},
+ {'id': 'SS-013',
+  'name': 'Product 055',
+  'category': 'Sweets / Snacks',
+  'unit': 'unit',
+  'quantity_on_hand': 3.0,
+  'opening_quantity': 3.0,
+  'unit_price': 80.0,
+  'daily_sales_estimate': 1.0},
+ {'id': 'SS-014',
+  'name': 'Product 056',
+  'category': 'Sweets / Snacks',
+  'unit': 'unit',
+  'quantity_on_hand': 1.0,
+  'opening_quantity': 1.0,
+  'unit_price': 90.0,
+  'daily_sales_estimate': 1.0},
+ {'id': 'SS-015',
+  'name': 'Product 057',
+  'category': 'Sweets / Snacks',
+  'unit': 'unit',
+  'quantity_on_hand': 1.0,
+  'opening_quantity': 1.0,
+  'unit_price': 90.0,
+  'daily_sales_estimate': 1.0},
+ {'id': 'SS-016',
+  'name': 'Product 058',
+  'category': 'Sweets / Snacks',
+  'unit': 'unit',
+  'quantity_on_hand': 5.0,
+  'opening_quantity': 5.0,
+  'unit_price': 40.0,
+  'daily_sales_estimate': 1.0},
+ {'id': 'SS-017',
+  'name': 'Product 059',
+  'category': 'Sweets / Snacks',
+  'unit': 'unit',
+  'quantity_on_hand': 5.0,
+  'opening_quantity': 5.0,
+  'unit_price': 40.0,
+  'daily_sales_estimate': 1.0},
+ {'id': 'SS-018',
+  'name': 'Product 060',
+  'category': 'Sweets / Snacks',
+  'unit': 'unit',
+  'quantity_on_hand': 1.0,
+  'opening_quantity': 1.0,
+  'unit_price': 180.0,
+  'daily_sales_estimate': 1.0},
+ {'id': 'SS-019',
+  'name': 'Product 061',
+  'category': 'Sweets / Snacks',
+  'unit': 'unit',
+  'quantity_on_hand': 1.0,
+  'opening_quantity': 1.0,
+  'unit_price': 180.0,
+  'daily_sales_estimate': 1.0},
+ {'id': 'SS-020',
+  'name': 'Product 062',
+  'category': 'Sweets / Snacks',
+  'unit': 'unit',
+  'quantity_on_hand': 1.0,
+  'opening_quantity': 1.0,
+  'unit_price': 180.0,
+  'daily_sales_estimate': 1.0},
+ {'id': 'SS-021',
+  'name': 'Product 063',
+  'category': 'Sweets / Snacks',
+  'unit': 'unit',
+  'quantity_on_hand': 1.0,
+  'opening_quantity': 1.0,
+  'unit_price': 255.0,
+  'daily_sales_estimate': 1.0},
+ {'id': 'AO-002',
+  'name': 'Product 064',
+  'category': 'Accessories / Other',
+  'unit': 'unit',
+  'quantity_on_hand': 10.0,
+  'opening_quantity': 10.0,
+  'unit_price': 150.0,
+  'daily_sales_estimate': 1.0}]
 
 
 def default_sales() -> List[Dict[str, Any]]:
-    base_day = date.today()
-    demo_sales = []
-
-    sample_items = [
-        ("PR-002", "Gelato Pre-Roll", 6, 32.0),
-        ("FL-002", "Gelato Flower", 10, 22.0),
-        ("AC-001", "Rolling Papers Classic", 2, 25.0),
-        ("FL-003", "Blue Dream Flower", 8, 16.0),
-        ("AC-002", "Canna Juice Berry", 3, 45.0),
-        ("PR-004", "Wedding Cake Pre-Roll", 4, 35.0),
-    ]
-
-    for i in range(10):
-        sale_date = base_day - timedelta(days=9 - i)
-        items = []
-        total = 0.0
-
-        for j, product in enumerate(sample_items):
-            if (i + j) % 3 == 0:
-                product_id, name, qty, price = product
-                quantity = max(1, qty + ((i + j) % 4) - 1)
-                line_total = quantity * price
-                total += line_total
-                items.append(
-                    {
-                        "product_id": product_id,
-                        "name": name,
-                        "quantity": float(quantity),
-                        "unit_price": float(price),
-                        "line_total": float(line_total),
-                    }
-                )
-
-        if items:
-            demo_sales.append(
-                {
-                    "sale_id": make_id("SALE"),
-                    "timestamp": datetime.combine(sale_date, datetime.min.time()).replace(hour=10 + i % 8).strftime("%Y-%m-%d %H:%M:%S"),
-                    "payment_method": PAYMENT_METHODS[i % len(PAYMENT_METHODS)],
-                    "items": items,
-                    "total": float(total),
-                }
-            )
-
-    return demo_sales
+    # Live system starts with no demo sales.
+    return []
 
 
 # ============================================================
@@ -393,36 +854,80 @@ def load_json(path: Path, fallback: Any) -> Any:
         with path.open("r", encoding="utf-8") as file:
             return json.load(file)
     except json.JSONDecodeError:
-        st.warning(f"{path.name} was corrupted or unreadable. Demo data has been reloaded.")
+        st.warning(f"{path.name} was corrupted or unreadable. A clean starting file has been reloaded.")
         save_json(path, fallback)
         return fallback
 
 
+
+def is_legacy_demo_inventory(data: Any) -> bool:
+    """
+    Detects the earlier placeholder/demo inventory so the first live deployment
+    can seed the new live-lite stock list instead of keeping the old 15 demo rows.
+    It will not overwrite once the live inventory has been edited/saved.
+    """
+    if not isinstance(data, list) or not data:
+        return False
+
+    legacy_names = {
+        "Purple Punch Pre-Roll",
+        "Gelato Pre-Roll",
+        "Blue Dream Pre-Roll",
+        "Wedding Cake Pre-Roll",
+        "Runtz Pre-Roll",
+        "Purple Punch Flower",
+        "Gelato Flower",
+        "Blue Dream Flower",
+        "Wedding Cake Flower",
+        "Runtz Flower",
+        "Rolling Papers Classic",
+        "Canna Juice Berry",
+        "Canna Juice Citrus",
+        "Premium Grinder",
+        "Refillable Lighter",
+    }
+    names = {str(row.get("name", "")).strip() for row in data if isinstance(row, dict)}
+    return bool(names & legacy_names)
+
+
 def load_inventory() -> pd.DataFrame:
     data = load_json(INVENTORY_FILE, default_inventory())
+
+    if is_legacy_demo_inventory(data):
+        data = default_inventory()
+        save_json(INVENTORY_FILE, data)
+        st.toast("Live stock list loaded. Old demo inventory was replaced.", icon="✅")
+
     df = pd.DataFrame(data)
 
-    expected_cols = ["id", "name", "category", "unit", "quantity_on_hand", "unit_price", "daily_sales_estimate"]
+    expected_cols = ["id", "name", "category", "unit", "quantity_on_hand", "opening_quantity", "unit_price", "daily_sales_estimate"]
     for col in expected_cols:
         if col not in df.columns:
-            if col in ["quantity_on_hand", "unit_price", "daily_sales_estimate"]:
+            if col == "opening_quantity" and "quantity_on_hand" in df.columns:
+                df[col] = df["quantity_on_hand"]
+            elif col in ["quantity_on_hand", "opening_quantity", "unit_price", "daily_sales_estimate"]:
                 df[col] = 0.0
             else:
                 df[col] = ""
 
     df["quantity_on_hand"] = pd.to_numeric(df["quantity_on_hand"], errors="coerce").fillna(0.0)
+    df["opening_quantity"] = pd.to_numeric(df["opening_quantity"], errors="coerce").fillna(df["quantity_on_hand"])
     df["unit_price"] = pd.to_numeric(df["unit_price"], errors="coerce").fillna(0.0)
     df["daily_sales_estimate"] = pd.to_numeric(df["daily_sales_estimate"], errors="coerce").replace(0, pd.NA)
+    df["opening_stock_value"] = df["opening_quantity"] * df["unit_price"]
     df["stock_value"] = df["quantity_on_hand"] * df["unit_price"]
+    df["sold_quantity"] = (df["opening_quantity"] - df["quantity_on_hand"]).clip(lower=0)
+    df["sold_stock_value"] = df["sold_quantity"] * df["unit_price"]
     df["days_stock_on_hand"] = (df["quantity_on_hand"] / df["daily_sales_estimate"]).fillna(999.0)
     df["status"] = df["days_stock_on_hand"].apply(get_status)
     return df
 
 
 def save_inventory(df: pd.DataFrame) -> None:
-    save_cols = ["id", "name", "category", "unit", "quantity_on_hand", "unit_price", "daily_sales_estimate"]
+    save_cols = ["id", "name", "category", "unit", "quantity_on_hand", "opening_quantity", "unit_price", "daily_sales_estimate"]
     clean_df = df[save_cols].copy()
     clean_df["quantity_on_hand"] = clean_df["quantity_on_hand"].astype(float)
+    clean_df["opening_quantity"] = clean_df["opening_quantity"].astype(float)
     clean_df["unit_price"] = clean_df["unit_price"].astype(float)
     clean_df["daily_sales_estimate"] = clean_df["daily_sales_estimate"].astype(float)
     save_json(INVENTORY_FILE, clean_df.to_dict(orient="records"))
@@ -435,12 +940,6 @@ def load_sales() -> List[Dict[str, Any]]:
 def save_sales(sales: List[Dict[str, Any]]) -> None:
     save_json(SALES_FILE, sales)
 
-
-def reset_demo_data() -> None:
-    save_json(INVENTORY_FILE, default_inventory())
-    save_json(SALES_FILE, default_sales())
-    st.session_state.cart = {}
-    st.toast("Demo data reset successfully.", icon="✅")
 
 
 # ============================================================
@@ -492,10 +991,12 @@ def inventory_display_df(df: pd.DataFrame) -> pd.DataFrame:
     output["Unit"] = output["unit"]
     output["Qty"] = output["quantity_on_hand"].round(2)
     output["Price (R)"] = output["unit_price"].round(2)
-    output["Stock Value (R)"] = output["stock_value"].round(2)
+    output["Opening Value (R)"] = output["opening_stock_value"].round(2)
+    output["Current Value (R)"] = output["stock_value"].round(2)
+    output["Value Sold (R)"] = output["sold_stock_value"].round(2)
     output["Days on Hand"] = output["days_stock_on_hand"].round(1)
     output["Status"] = output["status"]
-    return output[["Product", "Category", "Unit", "Qty", "Price (R)", "Stock Value (R)", "Days on Hand", "Status"]]
+    return output[["Product", "Category", "Unit", "Qty", "Price (R)", "Opening Value (R)", "Current Value (R)", "Value Sold (R)", "Days on Hand", "Status"]]
 
 
 def sales_to_dataframe(sales: List[Dict[str, Any]]) -> pd.DataFrame:
@@ -535,6 +1036,65 @@ def sale_items_to_dataframe(sales: List[Dict[str, Any]]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def stock_valuation_summary(inventory: pd.DataFrame, sales: List[Dict[str, Any]]) -> Dict[str, float]:
+    """
+    Opening Stock Value = value loaded at the start of the live period.
+    Sales Value = logged sales value.
+    Value Balance = Opening Stock Value less logged sales.
+    Current Stock Value = value of the remaining quantity on hand.
+    """
+    opening_stock_value = float(inventory["opening_stock_value"].sum()) if "opening_stock_value" in inventory.columns else 0.0
+    current_stock_value = float(inventory["stock_value"].sum()) if "stock_value" in inventory.columns else 0.0
+    total_sales_value = float(sum(float(sale.get("total", 0.0)) for sale in sales))
+    today_sales_value = 0.0
+    for sale in sales:
+        if str(sale.get("timestamp", ""))[:10] == today_string():
+            today_sales_value += float(sale.get("total", 0.0))
+
+    return {
+        "opening_stock_value": opening_stock_value,
+        "current_stock_value": current_stock_value,
+        "total_sales_value": total_sales_value,
+        "today_sales_value": today_sales_value,
+        "value_balance_less_sales": opening_stock_value - total_sales_value,
+    }
+
+
+def build_backup_zip(inventory: pd.DataFrame, sales: List[Dict[str, Any]], only_today: bool = False) -> bytes:
+    """
+    Creates a downloadable backup pack containing inventory, sales and raw JSON.
+    This is the daily safety net while the app is still using lightweight local storage.
+    """
+    sales_df = sales_to_dataframe(sales)
+    items_df = sale_items_to_dataframe(sales)
+
+    if not sales_df.empty:
+        sales_df["Date"] = pd.to_datetime(sales_df["Timestamp"], errors="coerce").dt.date
+    if not items_df.empty:
+        items_df["date_parsed"] = pd.to_datetime(items_df["date"], errors="coerce").dt.date
+
+    if only_today:
+        today = date.today()
+        if not sales_df.empty:
+            sales_df = sales_df[sales_df["Date"] == today].copy()
+        if not items_df.empty:
+            items_df = items_df[items_df["date_parsed"] == today].copy()
+
+    inventory_export = inventory_display_df(inventory)
+    buffer = io.BytesIO()
+
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("inventory_current.csv", inventory_export.to_csv(index=False))
+        zf.writestr("sales_summary.csv", sales_df.to_csv(index=False))
+        zf.writestr("sales_line_items.csv", items_df.to_csv(index=False))
+        zf.writestr("raw_inventory.json", inventory[["id", "name", "category", "unit", "quantity_on_hand", "opening_quantity", "unit_price", "daily_sales_estimate"]].to_json(orient="records", indent=2))
+        zf.writestr("raw_sales.json", json.dumps(sales, indent=2))
+        zf.writestr("backup_notes.txt", f"Saint Herb backup created at {now_string()}\nOnly today: {only_today}\n")
+
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
 # ============================================================
 # Dashboard
 # ============================================================
@@ -548,11 +1108,11 @@ def page_dashboard(inventory: pd.DataFrame, sales: List[Dict[str, Any]]) -> None
     sales_df = sales_to_dataframe(sales)
     items_df = sale_items_to_dataframe(sales)
 
-    total_stock_value = inventory["stock_value"].sum()
-    today_sales = 0.0
-    if not sales_df.empty:
-        sales_df["Date"] = pd.to_datetime(sales_df["Timestamp"], errors="coerce").dt.date
-        today_sales = sales_df.loc[sales_df["Date"] == date.today(), "Total (R)"].sum()
+    valuation = stock_valuation_summary(inventory, sales)
+    total_stock_value = valuation["opening_stock_value"]
+    current_stock_value = valuation["current_stock_value"]
+    today_sales = valuation["today_sales_value"]
+    value_balance = valuation["value_balance_less_sales"]
 
     low_stock_items = int((inventory["status"] == "Low").sum())
     avg_days = inventory["days_stock_on_hand"].replace(999, pd.NA).dropna().mean()
@@ -560,19 +1120,25 @@ def page_dashboard(inventory: pd.DataFrame, sales: List[Dict[str, Any]]) -> None
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        metric_card("Total Stock Value", money(total_stock_value), "Auto-calculated from quantity × price")
+        metric_card("Opening Stock Value", money(total_stock_value), "Loaded stock value before sales")
     with col2:
         metric_card("Today's Sales", money(today_sales), f"Sales date: {today_string()}")
     with col3:
-        metric_card("Low Stock Items", str(low_stock_items), "Items with fewer than 10 days on hand")
+        metric_card("Value Balance", money(value_balance), "Opening stock value less all logged sales")
     with col4:
-        metric_card("Avg Days on Hand", f"{avg_days:,.1f}", "Based on demo daily sales estimates")
+        metric_card("Current Stock Value", money(current_stock_value), "Live value after stock deductions")
+
+    col5, col6 = st.columns(2)
+    with col5:
+        metric_card("Low Stock Items", str(low_stock_items), "Items with fewer than 10 days on hand")
+    with col6:
+        metric_card("Avg Days on Hand", f"{avg_days:,.1f}", "Based on daily sales estimates")
 
     st.divider()
 
     c1, c2 = st.columns([1.1, 1])
     with c1:
-        st.subheader("Stock Value by Category")
+        st.subheader("Current Stock Value by Category")
         category_stock = inventory.groupby("category", as_index=False)["stock_value"].sum()
         fig = px.bar(
             category_stock,
@@ -583,7 +1149,7 @@ def page_dashboard(inventory: pd.DataFrame, sales: List[Dict[str, Any]]) -> None
             height=420,
         )
         fig.update_layout(margin=dict(l=10, r=10, t=30, b=10))
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     with c2:
         st.subheader("Recent Sales Trend")
@@ -600,7 +1166,7 @@ def page_dashboard(inventory: pd.DataFrame, sales: List[Dict[str, Any]]) -> None
                 height=420,
             )
             fig.update_layout(margin=dict(l=10, r=10, t=30, b=10))
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
     st.subheader("Top Selling Products")
     if items_df.empty:
@@ -622,7 +1188,7 @@ def page_dashboard(inventory: pd.DataFrame, sales: List[Dict[str, Any]]) -> None
             height=420,
         )
         fig.update_layout(yaxis={"categoryorder": "total ascending"}, margin=dict(l=10, r=10, t=30, b=10))
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
 
 # ============================================================
@@ -732,7 +1298,7 @@ def render_receipt(sale: Dict[str, Any]) -> None:
             "line_total": "Line Total",
         }
     )
-    st.dataframe(receipt_df[["Product", "Qty", "Price", "Line Total"]], use_container_width=True, hide_index=True)
+    st.dataframe(receipt_df[["Product", "Qty", "Price", "Line Total"]], width="stretch", hide_index=True)
     st.markdown(f"### Grand Total: {money(float(sale['total']))}")
 
 
@@ -744,12 +1310,12 @@ def page_pos(inventory: pd.DataFrame) -> None:
 
     top1, top2, top3 = st.columns([1, 1, 2])
     with top1:
-        if st.button("➕ New Sale", type="primary", use_container_width=True):
+        if st.button("➕ New Sale", type="primary", width="stretch"):
             st.session_state.cart = {}
             st.session_state.new_sale_started = True
             st.toast("New sale started.", icon="🛒")
     with top2:
-        if st.button("Clear Cart", use_container_width=True):
+        if st.button("Clear Cart", width="stretch"):
             st.session_state.cart = {}
             st.toast("Cart cleared.", icon="🧹")
 
@@ -761,7 +1327,7 @@ def page_pos(inventory: pd.DataFrame) -> None:
         st.subheader("Catalog")
         search = st.text_input("Search product", placeholder="Search by product name or category...", label_visibility="collapsed")
 
-        tab_labels = ["All", "Pre-Rolls", "Flower / Bud", "Accessories"]
+        tab_labels = ["All"] + CATEGORIES
         tabs = st.tabs(tab_labels)
 
         for tab, category_filter in zip(tabs, tab_labels):
@@ -813,16 +1379,16 @@ def page_pos(inventory: pd.DataFrame) -> None:
 
                             b1, b2, b3, b4 = st.columns(4)
                             with b1:
-                                if st.button("+1", key=f"plus1_{category_filter}_{product['id']}", use_container_width=True):
+                                if st.button("+1", key=f"plus1_{category_filter}_{product['id']}", width="stretch"):
                                     add_to_cart(product, 1.0)
                             with b2:
-                                if st.button("+5", key=f"plus5_{category_filter}_{product['id']}", use_container_width=True):
+                                if st.button("+5", key=f"plus5_{category_filter}_{product['id']}", width="stretch"):
                                     add_to_cart(product, 5.0)
                             with b3:
-                                if st.button("+10", key=f"plus10_{category_filter}_{product['id']}", use_container_width=True):
+                                if st.button("+10", key=f"plus10_{category_filter}_{product['id']}", width="stretch"):
                                     add_to_cart(product, 10.0)
                             with b4:
-                                if st.button("Add", key=f"add_{category_filter}_{product['id']}", type="primary", use_container_width=True):
+                                if st.button("Add", key=f"add_{category_filter}_{product['id']}", type="primary", width="stretch"):
                                     add_to_cart(product, qty)
 
     with right:
@@ -840,7 +1406,7 @@ def page_pos(inventory: pd.DataFrame) -> None:
                     st.caption(f"{item['quantity']:g} {item['unit']} × {money(item['unit_price'])}")
                 with c2:
                     st.markdown(f"**{money(line_total)}**")
-                    if st.button("Remove", key=f"remove_{product_id}", use_container_width=True):
+                    if st.button("Remove", key=f"remove_{product_id}", width="stretch"):
                         del st.session_state.cart[product_id]
                         st.rerun()
                 st.divider()
@@ -850,7 +1416,7 @@ def page_pos(inventory: pd.DataFrame) -> None:
 
             payment_method = st.selectbox("Payment Method", PAYMENT_METHODS)
 
-            if st.button("Conclude Sale", type="primary", use_container_width=True):
+            if st.button("Conclude Sale", type="primary", width="stretch"):
                 if conclude_sale(inventory, payment_method):
                     st.rerun()
 
@@ -871,8 +1437,14 @@ def page_inventory(inventory: pd.DataFrame) -> None:
         "Edit stock and pricing, add products, make manual adjustments, and monitor low-stock risk.",
     )
 
-    total_stock_value = inventory["stock_value"].sum()
-    metric_card("Total Stock Value", money(total_stock_value), "Live value based on the current inventory table")
+    valuation = stock_valuation_summary(inventory, load_sales())
+    cval1, cval2, cval3 = st.columns(3)
+    with cval1:
+        metric_card("Opening Stock Value", money(valuation["opening_stock_value"]), "Loaded stock value before sales")
+    with cval2:
+        metric_card("Current Stock Value", money(valuation["current_stock_value"]), "Live stock value after sales")
+    with cval3:
+        metric_card("Value Balance", money(valuation["value_balance_less_sales"]), "Opening stock value less logged sales")
 
     st.divider()
 
@@ -897,21 +1469,25 @@ def page_inventory(inventory: pd.DataFrame) -> None:
 
     st.dataframe(
         display.style.apply(style_status, axis=1),
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
 
     st.subheader("Inline Editing")
     st.caption("Edit quantity, price, and daily sales estimate. Save changes to persist them.")
 
-    editor_df = inventory[["id", "name", "category", "unit", "quantity_on_hand", "unit_price", "daily_sales_estimate"]].copy()
+    editor_df = inventory[["id", "name", "category", "unit", "quantity_on_hand", "opening_quantity", "unit_price", "daily_sales_estimate"]].copy()
     edited_df = st.data_editor(
         editor_df,
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
-        disabled=["id", "name", "category", "unit"],
+        disabled=["id"],
         column_config={
-            "quantity_on_hand": st.column_config.NumberColumn("Qty", min_value=0.0, step=0.5),
+            "name": st.column_config.TextColumn("Product Name", required=True),
+            "category": st.column_config.SelectboxColumn("Category", options=CATEGORIES, required=True),
+            "unit": st.column_config.SelectboxColumn("Unit", options=UNITS, required=True),
+            "quantity_on_hand": st.column_config.NumberColumn("Qty on Hand", min_value=0.0, step=0.5),
+            "opening_quantity": st.column_config.NumberColumn("Opening Qty", min_value=0.0, step=0.5),
             "unit_price": st.column_config.NumberColumn("Price (R)", min_value=0.0, step=1.0, format="R %.2f"),
             "daily_sales_estimate": st.column_config.NumberColumn("Daily Sales Estimate", min_value=0.01, step=0.5),
         },
@@ -923,6 +1499,8 @@ def page_inventory(inventory: pd.DataFrame) -> None:
         for _, row in edited_df.iterrows():
             if safe_float(row["quantity_on_hand"]) < 0:
                 validation_errors.append(f"{row['name']}: quantity cannot be negative.")
+            if safe_float(row["opening_quantity"]) < 0:
+                validation_errors.append(f"{row['name']}: opening quantity cannot be negative.")
             if safe_float(row["unit_price"]) < 0:
                 validation_errors.append(f"{row['name']}: price cannot be negative.")
             if safe_float(row["daily_sales_estimate"]) <= 0:
@@ -963,6 +1541,7 @@ def page_inventory(inventory: pd.DataFrame) -> None:
                         "category": category,
                         "unit": unit,
                         "quantity_on_hand": float(quantity),
+                        "opening_quantity": float(quantity),
                         "unit_price": float(price),
                         "daily_sales_estimate": float(daily_estimate),
                     }
@@ -1015,6 +1594,15 @@ def page_sales_reports(sales: List[Dict[str, Any]]) -> None:
 
     if sales_df.empty:
         st.info("No sales logged yet.")
+        inventory = load_inventory()
+        backup = build_backup_zip(inventory, sales, only_today=True)
+        st.download_button(
+            "Save Today's Data Backup",
+            data=backup,
+            file_name=f"saint_herb_today_backup_{today_string()}.zip",
+            mime="application/zip",
+            width="stretch",
+        )
         return
 
     sales_df["Timestamp Parsed"] = pd.to_datetime(sales_df["Timestamp"], errors="coerce")
@@ -1039,7 +1627,7 @@ def page_sales_reports(sales: List[Dict[str, Any]]) -> None:
     st.subheader("Sales History")
     st.dataframe(
         filtered_sales[["Sale ID", "Timestamp", "Payment Method", "Items", "Total (R)"]],
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
 
@@ -1049,8 +1637,28 @@ def page_sales_reports(sales: List[Dict[str, Any]]) -> None:
         data=csv,
         file_name=f"saint_herb_sales_history_{today_string()}.csv",
         mime="text/csv",
-        use_container_width=True,
+        width="stretch",
     )
+
+    full_backup = build_backup_zip(load_inventory(), sales, only_today=False)
+    today_backup = build_backup_zip(load_inventory(), sales, only_today=True)
+    bcol1, bcol2 = st.columns(2)
+    with bcol1:
+        st.download_button(
+            "Save Today's Data Backup",
+            data=today_backup,
+            file_name=f"saint_herb_today_backup_{today_string()}.zip",
+            mime="application/zip",
+            width="stretch",
+        )
+    with bcol2:
+        st.download_button(
+            "Save Full Backup Pack",
+            data=full_backup,
+            file_name=f"saint_herb_full_backup_{today_string()}.zip",
+            mime="application/zip",
+            width="stretch",
+        )
 
     st.divider()
 
@@ -1060,14 +1668,14 @@ def page_sales_reports(sales: List[Dict[str, Any]]) -> None:
         by_day = filtered_sales.groupby("Date", as_index=False)["Total (R)"].sum()
         fig = px.line(by_day, x="Date", y="Total (R)", markers=True, height=420)
         fig.update_layout(margin=dict(l=10, r=10, t=30, b=10))
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     with c2:
         st.subheader("Payment Mix")
         payment_mix = filtered_sales.groupby("Payment Method", as_index=False)["Total (R)"].sum()
         fig = px.pie(payment_mix, names="Payment Method", values="Total (R)", hole=0.55, height=420)
         fig.update_layout(margin=dict(l=10, r=10, t=30, b=10))
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     st.subheader("Sales by Product")
     if items_df.empty:
@@ -1089,7 +1697,7 @@ def page_sales_reports(sales: List[Dict[str, Any]]) -> None:
                     "sales": "Sales (R)",
                 }
             ),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
@@ -1103,7 +1711,7 @@ def page_sales_reports(sales: List[Dict[str, Any]]) -> None:
             labels={"sales": "Sales (R)", "name": "Product"},
         )
         fig.update_layout(yaxis={"categoryorder": "total ascending"}, margin=dict(l=10, r=10, t=30, b=10))
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
 
 # ============================================================
@@ -1113,33 +1721,53 @@ def page_sales_reports(sales: List[Dict[str, Any]]) -> None:
 def page_settings() -> None:
     hero(
         "Settings",
-        "Manage demo data, persistence files, and operational notes for future production hardening.",
+        "Manage lightweight storage files, daily backups, and notes for the upcoming database upgrade.",
     )
+
+    inventory = load_inventory()
+    sales = load_sales()
 
     st.subheader("Data Files")
     st.write(f"Inventory file: `{INVENTORY_FILE.resolve()}`")
     st.write(f"Sales file: `{SALES_FILE.resolve()}`")
 
-    st.warning("Resetting demo data will overwrite the current local inventory and sales history files.")
+    st.info("The reset demo data button has been removed for live trading safety.")
 
-    if st.button("Reset Demo Data", type="primary"):
-        reset_demo_data()
-        st.rerun()
+    st.subheader("Daily Backup")
+    st.caption("Use this at end-of-day while the app is still on lightweight local JSON storage.")
+
+    today_backup = build_backup_zip(inventory, sales, only_today=True)
+    full_backup = build_backup_zip(inventory, sales, only_today=False)
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.download_button(
+            "Save Today's Data Backup",
+            data=today_backup,
+            file_name=f"saint_herb_today_backup_{today_string()}.zip",
+            mime="application/zip",
+            width="stretch",
+        )
+    with c2:
+        st.download_button(
+            "Save Full Backup Pack",
+            data=full_backup,
+            file_name=f"saint_herb_full_backup_{today_string()}.zip",
+            mime="application/zip",
+            width="stretch",
+        )
 
     st.divider()
 
     st.subheader("Production Notes")
     st.markdown(
         """
-        For a live retail environment, consider adding:
+        For the next upgrade, move storage from local JSON files to a proper database:
+        - Supabase or PostgreSQL for persistent sales and inventory records.
         - User login and cashier permissions.
-        - Barcode scanning.
-        - Tax/VAT treatment.
-        - Supplier purchase orders.
-        - Stock receiving workflow.
         - Audit logs for every inventory adjustment.
-        - Cloud database such as PostgreSQL, Supabase, Neon, or Azure SQL.
-        - Proper backups and role-based access.
+        - End-of-day reports by cashier/payment type.
+        - Barcode scanning and supplier receiving workflow.
         """
     )
 
@@ -1172,7 +1800,7 @@ def main() -> None:
         st.write(f"Cart total: **{money(cart_total())}**")
 
         st.divider()
-        st.caption("Demo build using neutral placeholder product data.")
+        st.caption("Lite live build. Save a backup at the end of each trading day.")
 
     if page == "Dashboard":
         page_dashboard(inventory, sales)
