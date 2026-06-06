@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.env
+venv/
+.venv/
+saint_herb_inventory.json
+saint_herb_sales.json
