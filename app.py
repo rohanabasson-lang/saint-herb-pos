@@ -1,33 +1,74 @@
 """
-Saint Herb Premium Inventory Management + POS
-============================================
+Saint Herb Premium Inventory Management + POS - FINAL POLISHED BUILD
+====================================================================
+
+This file is intentionally seeded with neutral Product 001-064 placeholders.
+The authorised store owner can rename products and update quantities/prices inside the app.
+
+MAJOR UPGRADE SUMMARY
+---------------------
+This version upgrades the original local-JSON Streamlit POS into a safer go-live lite build:
+
+1. Monthly edit/void controls
+   - A transaction can only be edited or voided during its open month window.
+   - A month opens on the 2nd day of that transaction month.
+   - A month closes at the end of the 1st day of the following month.
+   - Editing/voiding requires staff/bartender full name and a mandatory reason.
+   - Voids and edits are retained in sale modification history and in a separate audit file.
+
+2. Audit trail
+   - Adds saint_herb_audit.json.
+   - Sales Reports now includes Sales History, Edit/Void Sales, Voids & Edits Log, Audit Trail, and Backups.
+
+3. Pricing engine
+   - Adds a modular PricingEngine class.
+   - Supports total upfront investment, payback months, overhead recovery rate,
+     default risk buffer, default margin, and expected monthly units.
+   - Formula:
+       Fixed Cost Buffer per Unit = (Total Upfront Investment × Overhead Recovery Rate) / Expected Volume
+       Loaded Unit Cost = Unit Cost Input + Fixed Cost Buffer
+       Suggested Selling Price = Loaded Unit Cost / (1 - Desired Margin % - Risk Buffer %)
+
+4. Enhanced product creation/pricing
+   - Add/edit product pricing from unit cost, desired margin, risk buffer, expected units.
+   - Supports rounding to nearest/up/down 5 or 10.
+   - Supports special deal text such as "3 for R100".
+   - Supports per-unit, per-gram, and pack style selling modes.
+
+5. Data preservation
+   - Does not delete or overwrite existing saint_herb_sales.json transactions.
+   - Local JSON files remain the temporary lightweight database.
+
+6. Auto pricing integration
+   - Inline Inventory saves now recalculate selling price when unit cost, desired margin,
+     risk buffer, or expected monthly units change.
+   - Existing manual prices are preserved when pricing drivers are unchanged.
 
 How to run locally
 ------------------
 1. Save this file as: app.py
 2. Install dependencies:
    pip install streamlit pandas plotly
-3. Run the app:
-   streamlit run app.py
 
-Notes
------
-- This lite live version uses local JSON files as a temporary lightweight database.
-- Inventory and sales persist to local JSON files in the same folder:
-  - saint_herb_inventory.json
-  - saint_herb_sales.json
-- Use the backup buttons daily while the full database upgrade is pending.
+   Or, if using the ZIP package:
+   pip install -r requirements.txt
+
+3. Run:
+   streamlit run app.py
 """
 
 from __future__ import annotations
 
-import json
-import uuid
+import copy
 import io
+import json
+import math
+import re
+import uuid
 import zipfile
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, time, timedelta
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 import plotly.express as px
@@ -48,10 +89,31 @@ st.set_page_config(
 APP_NAME = "Saint Herb"
 INVENTORY_FILE = Path("saint_herb_inventory.json")
 SALES_FILE = Path("saint_herb_sales.json")
+AUDIT_FILE = Path("saint_herb_audit.json")
+PRICING_CONFIG_FILE = Path("saint_herb_pricing_config.json")
 
-CATEGORIES = ["Pre-Rolls", "Flower / Bud", "Edibles", "Beverages", "Oils & Topicals", "Sweets / Snacks", "Accessories / Other"]
-UNITS = ["gram", "unit", "pack", "bottle"]
+# Neutral operational categories. The authorised store owner can rename/update products in-app.
+CATEGORIES = [
+    "Prepared Items",
+    "Bulk / By Weight",
+    "Packaged Goods",
+    "Beverages",
+    "Oils & Topicals",
+    "Sweets / Snacks",
+    "Accessories / Other",
+]
+UNITS = ["unit", "gram", "pack", "bottle", "box"]
+SELLING_MODES = ["Per Unit", "Per Gram", "Pack"]
 PAYMENT_METHODS = ["Cash", "Card", "EFT", "Other"]
+ROUNDING_OPTIONS = [
+    "No rounding",
+    "Round nearest 5",
+    "Round up to 5",
+    "Round down to 5",
+    "Round nearest 10",
+    "Round up to 10",
+    "Round down to 10",
+]
 
 
 # ============================================================
@@ -74,41 +136,19 @@ def inject_css() -> None:
                 --saint-yellow: #f7c948;
                 --saint-text-soft: #aeb7b2;
             }
-
-            .main .block-container {
-                padding-top: 1.2rem;
-                padding-bottom: 2rem;
-                max-width: 1450px;
-            }
-
-            h1, h2, h3 {
-                letter-spacing: -0.03em;
-            }
-
+            .main .block-container { padding-top: 1.2rem; padding-bottom: 2rem; max-width: 1450px; }
+            h1, h2, h3 { letter-spacing: -0.03em; }
             .saint-hero {
                 padding: 1.4rem 1.6rem;
                 border: 1px solid var(--saint-border);
                 border-radius: 24px;
-                background:
-                    radial-gradient(circle at top left, rgba(47, 209, 124, 0.22), transparent 32%),
-                    linear-gradient(135deg, rgba(19, 30, 24, 0.98), rgba(10, 14, 12, 0.92));
+                background: radial-gradient(circle at top left, rgba(47, 209, 124, 0.22), transparent 32%),
+                            linear-gradient(135deg, rgba(19, 30, 24, 0.98), rgba(10, 14, 12, 0.92));
                 box-shadow: 0 18px 50px rgba(0, 0, 0, 0.18);
                 margin-bottom: 1rem;
             }
-
-            .saint-hero-title {
-                font-size: 2.3rem;
-                font-weight: 800;
-                color: white;
-                margin: 0;
-            }
-
-            .saint-hero-subtitle {
-                color: var(--saint-text-soft);
-                margin-top: 0.35rem;
-                font-size: 1rem;
-            }
-
+            .saint-hero-title { font-size: 2.3rem; font-weight: 800; color: white; margin: 0; }
+            .saint-hero-subtitle { color: var(--saint-text-soft); margin-top: 0.35rem; font-size: 1rem; }
             .metric-card {
                 padding: 1.05rem 1.15rem;
                 border-radius: 20px;
@@ -117,28 +157,9 @@ def inject_css() -> None:
                 box-shadow: 0 12px 34px rgba(0,0,0,0.10);
                 min-height: 120px;
             }
-
-            .metric-label {
-                color: var(--saint-text-soft);
-                font-size: 0.82rem;
-                text-transform: uppercase;
-                letter-spacing: 0.08em;
-                font-weight: 700;
-                margin-bottom: 0.35rem;
-            }
-
-            .metric-value {
-                font-size: 1.85rem;
-                font-weight: 800;
-                letter-spacing: -0.03em;
-            }
-
-            .metric-help {
-                color: var(--saint-text-soft);
-                font-size: 0.85rem;
-                margin-top: 0.25rem;
-            }
-
+            .metric-label { color: var(--saint-text-soft); font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700; margin-bottom: 0.35rem; }
+            .metric-value { font-size: 1.85rem; font-weight: 800; letter-spacing: -0.03em; }
+            .metric-help { color: var(--saint-text-soft); font-size: 0.85rem; margin-top: 0.25rem; }
             .product-card {
                 padding: 1rem;
                 border-radius: 20px;
@@ -147,103 +168,28 @@ def inject_css() -> None:
                 box-shadow: 0 10px 30px rgba(0,0,0,0.10);
                 margin-bottom: 0.8rem;
             }
-
             .product-icon {
-                width: 100%;
-                min-height: 78px;
-                border-radius: 16px;
-                background:
-                    radial-gradient(circle at 30% 20%, rgba(47, 209, 124, 0.40), transparent 28%),
-                    linear-gradient(135deg, rgba(47,209,124,0.16), rgba(215,181,109,0.10));
+                width: 100%; min-height: 78px; border-radius: 16px;
+                background: radial-gradient(circle at 30% 20%, rgba(47, 209, 124, 0.40), transparent 28%),
+                            linear-gradient(135deg, rgba(47,209,124,0.16), rgba(215,181,109,0.10));
                 border: 1px solid rgba(47,209,124,0.16);
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                font-size: 2.1rem;
-                margin-bottom: 0.75rem;
+                display: flex; align-items: center; justify-content: center;
+                font-size: 2.1rem; margin-bottom: 0.75rem;
             }
-
-            .product-name {
-                font-weight: 800;
-                font-size: 1rem;
-                line-height: 1.25;
-                margin-bottom: 0.2rem;
-            }
-
-            .product-meta {
-                color: var(--saint-text-soft);
-                font-size: 0.82rem;
-            }
-
-            .product-price {
-                font-size: 1.15rem;
-                font-weight: 800;
-                color: var(--saint-green);
-                margin-top: 0.45rem;
-            }
-
-            .cart-box {
-                padding: 1rem;
-                border-radius: 22px;
-                background: linear-gradient(145deg, rgba(47,209,124,0.12), rgba(255,255,255,0.025));
-                border: 1px solid rgba(47,209,124,0.22);
-                box-shadow: 0 14px 40px rgba(0,0,0,0.12);
-            }
-
-            .cart-total {
-                font-size: 2rem;
-                font-weight: 900;
-                color: var(--saint-green);
-                margin-top: 0.2rem;
-            }
-
-            .status-pill {
-                padding: 0.25rem 0.55rem;
-                border-radius: 999px;
-                font-size: 0.78rem;
-                font-weight: 800;
-                display: inline-block;
-            }
-
-            .status-good {
-                color: #0a3b22;
-                background: #a7f3c8;
-            }
-
-            .status-medium {
-                color: #443300;
-                background: #ffe08a;
-            }
-
-            .status-low {
-                color: #4a1111;
-                background: #ffb3b3;
-            }
-
-            div[data-testid="stSidebar"] {
-                border-right: 1px solid rgba(255,255,255,0.08);
-            }
-
-            div.stButton > button {
-                border-radius: 14px;
-                font-weight: 800;
-                border: 1px solid rgba(47, 209, 124, 0.25);
-            }
-
-            div.stButton > button[kind="primary"] {
-                background: linear-gradient(135deg, #2fd17c, #0f8f4f);
-                color: white;
-                border: 0;
-            }
-
-            @media (max-width: 900px) {
-                .saint-hero-title {
-                    font-size: 1.7rem;
-                }
-                .metric-value {
-                    font-size: 1.35rem;
-                }
-            }
+            .product-name { font-weight: 800; font-size: 1rem; line-height: 1.25; margin-bottom: 0.2rem; }
+            .product-meta { color: var(--saint-text-soft); font-size: 0.82rem; }
+            .product-price { font-size: 1.15rem; font-weight: 800; color: var(--saint-green); margin-top: 0.45rem; }
+            .deal-pill { display: inline-block; padding: .25rem .55rem; border-radius: 999px; background: rgba(215,181,109,.18); border: 1px solid rgba(215,181,109,.35); color: #f0d99a; font-size: .78rem; font-weight: 800; margin-top: .45rem; }
+            .cart-box { padding: 1rem; border-radius: 22px; background: linear-gradient(145deg, rgba(47,209,124,0.12), rgba(255,255,255,0.025)); border: 1px solid rgba(47,209,124,0.22); box-shadow: 0 14px 40px rgba(0,0,0,0.12); }
+            .cart-total { font-size: 2rem; font-weight: 900; color: var(--saint-green); margin-top: 0.2rem; }
+            .status-pill { padding: 0.25rem 0.55rem; border-radius: 999px; font-size: 0.78rem; font-weight: 800; display: inline-block; }
+            .status-good { color: #0a3b22; background: #a7f3c8; }
+            .status-medium { color: #443300; background: #ffe08a; }
+            .status-low { color: #4a1111; background: #ffb3b3; }
+            div[data-testid="stSidebar"] { border-right: 1px solid rgba(255,255,255,0.08); }
+            div.stButton > button { border-radius: 14px; font-weight: 800; border: 1px solid rgba(47, 209, 124, 0.25); }
+            div.stButton > button[kind="primary"] { background: linear-gradient(135deg, #2fd17c, #0f8f4f); color: white; border: 0; }
+            @media (max-width: 900px) { .saint-hero-title { font-size: 1.7rem; } .metric-value { font-size: 1.35rem; } }
         </style>
         """,
         unsafe_allow_html=True,
@@ -255,12 +201,21 @@ def inject_css() -> None:
 # ============================================================
 
 def money(value: float) -> str:
-    return f"R {value:,.2f}"
+    return f"R {float(value):,.2f}"
 
 
 def safe_float(value: Any, default: float = 0.0) -> float:
     try:
+        if value is None or (isinstance(value, float) and math.isnan(value)):
+            return default
         return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(float(value))
     except (TypeError, ValueError):
         return default
 
@@ -277,6 +232,18 @@ def now_string() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def parse_dt(value: Any) -> Optional[datetime]:
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", ""))
+    except Exception:
+        try:
+            return pd.to_datetime(value).to_pydatetime()
+        except Exception:
+            return None
+
+
 def get_status(days_on_hand: float) -> str:
     if days_on_hand < 10:
         return "Low"
@@ -285,20 +252,11 @@ def get_status(days_on_hand: float) -> str:
     return "Good"
 
 
-def status_html(status: str) -> str:
-    css_class = {
-        "Good": "status-good",
-        "Medium": "status-medium",
-        "Low": "status-low",
-    }.get(status, "status-medium")
-    return f'<span class="status-pill {css_class}">{status}</span>'
-
-
 def icon_for_category(category: str) -> str:
     icons = {
-        "Pre-Rolls": "◼",
-        "Flower / Bud": "◆",
-        "Edibles": "⬢",
+        "Prepared Items": "◼",
+        "Bulk / By Weight": "◆",
+        "Packaged Goods": "⬢",
         "Beverages": "●",
         "Oils & Topicals": "◈",
         "Sweets / Snacks": "■",
@@ -307,624 +265,414 @@ def icon_for_category(category: str) -> str:
     return icons.get(category, "●")
 
 
-# ============================================================
-# Demo Data
-# ============================================================
-
-def default_inventory() -> List[Dict[str, Any]]:
-    """
-    Initial go-live stock loaded from the client's latest Saint Herb pricing sheet.
-
-    Pricing rule used for this live-lite file:
-    - Product names, quantities, categories and units follow the attached stock list.
-    - Unit Price is the rounded/friendly selling price selected from the helper pricing columns.
-    - Live sales start at R0.00. Opening Stock Value = quantity_on_hand × unit_price.
-    """
-    return [{'id': 'PR-001',
-  'name': 'Black Cherry Pre-Roll x25 IND',
-  'category': 'Pre-Rolls',
-  'unit': 'unit',
-  'quantity_on_hand': 25.0,
-  'opening_quantity': 25.0,
-  'unit_price': 120.0,
-  'daily_sales_estimate': 1.79},
- {'id': 'PR-002',
-  'name': 'Passion Fruit Pre-Roll x25 IND',
-  'category': 'Pre-Rolls',
-  'unit': 'unit',
-  'quantity_on_hand': 25.0,
-  'opening_quantity': 25.0,
-  'unit_price': 120.0,
-  'daily_sales_estimate': 1.79},
- {'id': 'PR-003',
-  'name': 'Sour Diesel GH Pre-Roll x25',
-  'category': 'Pre-Rolls',
-  'unit': 'unit',
-  'quantity_on_hand': 25.0,
-  'opening_quantity': 25.0,
-  'unit_price': 60.0,
-  'daily_sales_estimate': 1.79},
- {'id': 'PR-004',
-  'name': 'Blueberry GH Pre-Roll x25',
-  'category': 'Pre-Rolls',
-  'unit': 'unit',
-  'quantity_on_hand': 25.0,
-  'opening_quantity': 25.0,
-  'unit_price': 60.0,
-  'daily_sales_estimate': 1.79},
- {'id': 'PR-005',
-  'name': 'Super Lemon GH Pre-Roll x25',
-  'category': 'Pre-Rolls',
-  'unit': 'unit',
-  'quantity_on_hand': 25.0,
-  'opening_quantity': 25.0,
-  'unit_price': 65.0,
-  'daily_sales_estimate': 1.79},
- {'id': 'PR-006',
-  'name': 'The offering Pre-Roll x21',
-  'category': 'Pre-Rolls',
-  'unit': 'unit',
-  'quantity_on_hand': 21.0,
-  'opening_quantity': 21.0,
-  'unit_price': 45.0,
-  'daily_sales_estimate': 1.5},
- {'id': 'PR-007',
-  'name': 'Saint Reserve Pre-Roll x28',
-  'category': 'Pre-Rolls',
-  'unit': 'unit',
-  'quantity_on_hand': 28.0,
-  'opening_quantity': 28.0,
-  'unit_price': 45.0,
-  'daily_sales_estimate': 2.0},
- {'id': 'PR-008',
-  'name': 'Holy Grail Pre-Roll x31',
-  'category': 'Pre-Rolls',
-  'unit': 'unit',
-  'quantity_on_hand': 31.0,
-  'opening_quantity': 31.0,
-  'unit_price': 45.0,
-  'daily_sales_estimate': 2.21},
- {'id': 'FL-001',
-  'name': 'Wedding Cake Flower 10g',
-  'category': 'Flower / Bud',
-  'unit': 'gram',
-  'quantity_on_hand': 10.0,
-  'opening_quantity': 10.0,
-  'unit_price': 45.0,
-  'daily_sales_estimate': 1.0},
- {'id': 'FL-002',
-  'name': 'Kimbo Hybrid Flower',
-  'category': 'Flower / Bud',
-  'unit': 'gram',
-  'quantity_on_hand': 50.0,
-  'opening_quantity': 50.0,
-  'unit_price': 100.0,
-  'daily_sales_estimate': 3.57},
- {'id': 'FL-003',
-  'name': 'Maple Flower A 50g',
-  'category': 'Flower / Bud',
-  'unit': 'gram',
-  'quantity_on_hand': 50.0,
-  'opening_quantity': 50.0,
-  'unit_price': 110.0,
-  'daily_sales_estimate': 3.57},
- {'id': 'FL-004',
-  'name': 'Exotic Passion Fruit AAA Med 60g',
-  'category': 'Flower / Bud',
-  'unit': 'gram',
-  'quantity_on_hand': 50.0,
-  'opening_quantity': 50.0,
-  'unit_price': 135.0,
-  'daily_sales_estimate': 3.57},
- {'id': 'FL-005',
-  'name': 'Sour Diesel AA Flower 50g',
-  'category': 'Flower / Bud',
-  'unit': 'gram',
-  'quantity_on_hand': 50.0,
-  'opening_quantity': 50.0,
-  'unit_price': 120.0,
-  'daily_sales_estimate': 3.57},
- {'id': 'FL-006',
-  'name': 'Saint Reserve Indoor Hyrid',
-  'category': 'Flower / Bud',
-  'unit': 'gram',
-  'quantity_on_hand': 130.0,
-  'opening_quantity': 130.0,
-  'unit_price': 135.0,
-  'daily_sales_estimate': 9.29},
- {'id': 'FL-007',
-  'name': 'The offering',
-  'category': 'Flower / Bud',
-  'unit': 'gram',
-  'quantity_on_hand': 130.0,
-  'opening_quantity': 130.0,
-  'unit_price': 135.0,
-  'daily_sales_estimate': 9.29},
- {'id': 'FL-008',
-  'name': 'Holy Grail',
-  'category': 'Flower / Bud',
-  'unit': 'gram',
-  'quantity_on_hand': 130.0,
-  'opening_quantity': 130.0,
-  'unit_price': 135.0,
-  'daily_sales_estimate': 9.29},
- {'id': 'BV-001',
-  'name': 'Astroform Vita Soda - Cosmic Cranberry',
-  'category': 'Beverages',
-  'unit': 'bottle',
-  'quantity_on_hand': 6.0,
-  'opening_quantity': 6.0,
-  'unit_price': 120.0,
-  'daily_sales_estimate': 1.0},
- {'id': 'BV-002',
-  'name': 'Astroform Vita Soda - Lunar lemon',
-  'category': 'Beverages',
-  'unit': 'bottle',
-  'quantity_on_hand': 6.0,
-  'opening_quantity': 6.0,
-  'unit_price': 120.0,
-  'daily_sales_estimate': 1.0},
- {'id': 'BV-003',
-  'name': 'Astroform Vita Soda - Passion Fruit',
-  'category': 'Beverages',
-  'unit': 'bottle',
-  'quantity_on_hand': 6.0,
-  'opening_quantity': 6.0,
-  'unit_price': 120.0,
-  'daily_sales_estimate': 1.0},
- {'id': 'ED-001',
-  'name': 'Astroform Gelatine Gummy 4ml - 10 pack (APL & CRY) 20mg',
-  'category': 'Edibles',
-  'unit': 'unit',
-  'quantity_on_hand': 5.0,
-  'opening_quantity': 5.0,
-  'unit_price': 240.0,
-  'daily_sales_estimate': 1.0},
- {'id': 'ED-002',
-  'name': 'Astroform Gelatine Gummy 7ml - 8 pack (APL & CRY) 40mg',
-  'category': 'Edibles',
-  'unit': 'unit',
-  'quantity_on_hand': 5.0,
-  'opening_quantity': 5.0,
-  'unit_price': 305.0,
-  'daily_sales_estimate': 1.0},
- {'id': 'ED-003',
-  'name': 'Astroform Sugar Free Gelatine Gummy - 10 Pack (strawberry and peach) 20mg',
-  'category': 'Edibles',
-  'unit': 'unit',
-  'quantity_on_hand': 5.0,
-  'opening_quantity': 5.0,
-  'unit_price': 240.0,
-  'daily_sales_estimate': 1.0},
- {'id': 'ED-004',
-  'name': 'Astroform Sugar Free Gelatine Gummy - 10 Pack (grape and mango) 40mg',
-  'category': 'Edibles',
-  'unit': 'unit',
-  'quantity_on_hand': 5.0,
-  'opening_quantity': 5.0,
-  'unit_price': 305.0,
-  'daily_sales_estimate': 1.0},
- {'id': 'ED-005',
-  'name': 'Astroform Gelatine Gummy 4ml - 10 pack (BLRZ)',
-  'category': 'Edibles',
-  'unit': 'unit',
-  'quantity_on_hand': 5.0,
-  'opening_quantity': 5.0,
-  'unit_price': 240.0,
-  'daily_sales_estimate': 1.0},
- {'id': 'ED-006',
-  'name': 'Astroform Gelatine Gummy - 8 pack (PNAP & RASP)',
-  'category': 'Edibles',
-  'unit': 'unit',
-  'quantity_on_hand': 5.0,
-  'opening_quantity': 5.0,
-  'unit_price': 305.0,
-  'daily_sales_estimate': 1.0},
- {'id': 'ED-007',
-  'name': '5mg sweethearts',
-  'category': 'Edibles',
-  'unit': 'unit',
-  'quantity_on_hand': 4.0,
-  'opening_quantity': 4.0,
-  'unit_price': 200.0,
-  'daily_sales_estimate': 1.0},
- {'id': 'ED-008',
-  'name': '10mg Weedy OHs',
-  'category': 'Edibles',
-  'unit': 'unit',
-  'quantity_on_hand': 4.0,
-  'opening_quantity': 4.0,
-  'unit_price': 220.0,
-  'daily_sales_estimate': 1.0},
- {'id': 'ED-009',
-  'name': '25mg Berry Blaze',
-  'category': 'Edibles',
-  'unit': 'unit',
-  'quantity_on_hand': 4.0,
-  'opening_quantity': 4.0,
-  'unit_price': 235.0,
-  'daily_sales_estimate': 1.0},
- {'id': 'ED-010',
-  'name': '35mg Vegan Cookies',
-  'category': 'Edibles',
-  'unit': 'unit',
-  'quantity_on_hand': 4.0,
-  'opening_quantity': 4.0,
-  'unit_price': 90.0,
-  'daily_sales_estimate': 1.0},
- {'id': 'ED-011',
-  'name': '80mg Chocolate Brownies',
-  'category': 'Edibles',
-  'unit': 'unit',
-  'quantity_on_hand': 3.0,
-  'opening_quantity': 3.0,
-  'unit_price': 135.0,
-  'daily_sales_estimate': 1.0},
- {'id': 'BV-004',
-  'name': 'Canna Juice',
-  'category': 'Beverages',
-  'unit': 'bottle',
-  'quantity_on_hand': 3.0,
-  'opening_quantity': 3.0,
-  'unit_price': 145.0,
-  'daily_sales_estimate': 1.0},
- {'id': 'OT-001',
-  'name': '50ml Releeze oil for pain',
-  'category': 'Oils & Topicals',
-  'unit': 'unit',
-  'quantity_on_hand': 3.0,
-  'opening_quantity': 3.0,
-  'unit_price': 325.0,
-  'daily_sales_estimate': 1.0},
- {'id': 'OT-002',
-  'name': 'Massage Oils 100ml sensual and uplifting',
-  'category': 'Oils & Topicals',
-  'unit': 'unit',
-  'quantity_on_hand': 3.0,
-  'opening_quantity': 3.0,
-  'unit_price': 380.0,
-  'daily_sales_estimate': 1.0},
- {'id': 'OT-003',
-  'name': 'Thula baby butter',
-  'category': 'Oils & Topicals',
-  'unit': 'unit',
-  'quantity_on_hand': 3.0,
-  'opening_quantity': 3.0,
-  'unit_price': 325.0,
-  'daily_sales_estimate': 1.0},
- {'id': 'OT-004',
-  'name': '50mg Cannabis Herbal Healing Balm',
-  'category': 'Oils & Topicals',
-  'unit': 'unit',
-  'quantity_on_hand': 3.0,
-  'opening_quantity': 3.0,
-  'unit_price': 400.0,
-  'daily_sales_estimate': 1.0},
- {'id': 'OT-005',
-  'name': 'Magnesium Pain Lotion 100g',
-  'category': 'Oils & Topicals',
-  'unit': 'unit',
-  'quantity_on_hand': 3.0,
-  'opening_quantity': 3.0,
-  'unit_price': 530.0,
-  'daily_sales_estimate': 1.0},
- {'id': 'OT-006',
-  'name': 'Purple magnesium for body',
-  'category': 'Oils & Topicals',
-  'unit': 'unit',
-  'quantity_on_hand': 3.0,
-  'opening_quantity': 3.0,
-  'unit_price': 325.0,
-  'daily_sales_estimate': 1.0},
- {'id': 'OT-007',
-  'name': 'Yellow magnesium for underarm/natural deo',
-  'category': 'Oils & Topicals',
-  'unit': 'unit',
-  'quantity_on_hand': 3.0,
-  'opening_quantity': 3.0,
-  'unit_price': 235.0,
-  'daily_sales_estimate': 1.0},
- {'id': 'OT-008',
-  'name': '50ml Glo oil for anti aging/wrinkles skin oil',
-  'category': 'Oils & Topicals',
-  'unit': 'unit',
-  'quantity_on_hand': 3.0,
-  'opening_quantity': 3.0,
-  'unit_price': 530.0,
-  'daily_sales_estimate': 1.0},
- {'id': 'OT-009',
-  'name': 'Releaze Respiratory Balm',
-  'category': 'Oils & Topicals',
-  'unit': 'unit',
-  'quantity_on_hand': 3.0,
-  'opening_quantity': 3.0,
-  'unit_price': 380.0,
-  'daily_sales_estimate': 1.0},
- {'id': 'OT-010',
-  'name': 'Releaze Toxins Balm',
-  'category': 'Oils & Topicals',
-  'unit': 'unit',
-  'quantity_on_hand': 3.0,
-  'opening_quantity': 3.0,
-  'unit_price': 380.0,
-  'daily_sales_estimate': 1.0},
- {'id': 'SS-001',
-  'name': 'Supa Sweets',
-  'category': 'Sweets / Snacks',
-  'unit': 'unit',
-  'quantity_on_hand': 125.0,
-  'opening_quantity': 125.0,
-  'unit_price': 35.0,
-  'daily_sales_estimate': 8.93},
- {'id': 'SS-002',
-  'name': 'Chocolate',
-  'category': 'Sweets / Snacks',
-  'unit': 'unit',
-  'quantity_on_hand': 50.0,
-  'opening_quantity': 50.0,
-  'unit_price': 35.0,
-  'daily_sales_estimate': 3.57},
- {'id': 'SS-003',
-  'name': 'Rainbow Lollies',
-  'category': 'Sweets / Snacks',
-  'unit': 'unit',
-  'quantity_on_hand': 100.0,
-  'opening_quantity': 100.0,
-  'unit_price': 55.0,
-  'daily_sales_estimate': 7.14},
- {'id': 'SS-004',
-  'name': 'MRN Syrup Mango 200g',
-  'category': 'Sweets / Snacks',
-  'unit': 'unit',
-  'quantity_on_hand': 2.0,
-  'opening_quantity': 2.0,
-  'unit_price': 70.0,
-  'daily_sales_estimate': 1.0},
- {'id': 'SS-005',
-  'name': 'ALZ Honey Plum x 50',
-  'category': 'Sweets / Snacks',
-  'unit': 'unit',
-  'quantity_on_hand': 1.0,
-  'opening_quantity': 1.0,
-  'unit_price': 70.0,
-  'daily_sales_estimate': 1.0},
- {'id': 'SS-006',
-  'name': 'CAD Original Milk Chocolate 12 x 12g',
-  'category': 'Sweets / Snacks',
-  'unit': 'unit',
-  'quantity_on_hand': 5.0,
-  'opening_quantity': 5.0,
-  'unit_price': 55.0,
-  'daily_sales_estimate': 1.0},
- {'id': 'SS-007',
-  'name': 'Milkit Chew 2in1 Fruity Milk Punch 90g',
-  'category': 'Sweets / Snacks',
-  'unit': 'unit',
-  'quantity_on_hand': 5.0,
-  'opening_quantity': 5.0,
-  'unit_price': 40.0,
-  'daily_sales_estimate': 1.0},
- {'id': 'SS-008',
-  'name': 'MRS Jelly Babies x 135g',
-  'category': 'Sweets / Snacks',
-  'unit': 'unit',
-  'quantity_on_hand': 2.0,
-  'opening_quantity': 2.0,
-  'unit_price': 55.0,
-  'daily_sales_estimate': 1.0},
- {'id': 'AO-001',
-  'name': 'MRS Juicy Jellies x 128g',
-  'category': 'Accessories / Other',
-  'unit': 'unit',
-  'quantity_on_hand': 4.0,
-  'opening_quantity': 4.0,
-  'unit_price': 55.0,
-  'daily_sales_estimate': 1.0},
- {'id': 'SS-009',
-  'name': 'MRS Jelly Beans x 128g',
-  'category': 'Sweets / Snacks',
-  'unit': 'unit',
-  'quantity_on_hand': 4.0,
-  'opening_quantity': 4.0,
-  'unit_price': 55.0,
-  'daily_sales_estimate': 1.0},
- {'id': 'SS-010',
-  'name': 'ALZ BIFA KEKS Mini Cherry x 10',
-  'category': 'Sweets / Snacks',
-  'unit': 'unit',
-  'quantity_on_hand': 1.0,
-  'opening_quantity': 1.0,
-  'unit_price': 50.0,
-  'daily_sales_estimate': 1.0},
- {'id': 'SS-011',
-  'name': 'ALZ BIFA KEKS Mini Banana x 10',
-  'category': 'Sweets / Snacks',
-  'unit': 'unit',
-  'quantity_on_hand': 1.0,
-  'opening_quantity': 1.0,
-  'unit_price': 50.0,
-  'daily_sales_estimate': 1.0},
- {'id': 'SS-012',
-  'name': 'LKS Syrup Packets',
-  'category': 'Sweets / Snacks',
-  'unit': 'unit',
-  'quantity_on_hand': 5.0,
-  'opening_quantity': 5.0,
-  'unit_price': 70.0,
-  'daily_sales_estimate': 1.0},
- {'id': 'SS-013',
-  'name': 'ALZ Biscolata Minis x 11g',
-  'category': 'Sweets / Snacks',
-  'unit': 'unit',
-  'quantity_on_hand': 3.0,
-  'opening_quantity': 3.0,
-  'unit_price': 85.0,
-  'daily_sales_estimate': 1.0},
- {'id': 'SS-014',
-  'name': 'Yogueta Pin Pop Passion Fruit x 48',
-  'category': 'Sweets / Snacks',
-  'unit': 'unit',
-  'quantity_on_hand': 1.0,
-  'opening_quantity': 1.0,
-  'unit_price': 20.0,
-  'daily_sales_estimate': 1.0},
- {'id': 'SS-015',
-  'name': 'Yogueta Pin Pop Sour x 48',
-  'category': 'Sweets / Snacks',
-  'unit': 'unit',
-  'quantity_on_hand': 1.0,
-  'opening_quantity': 1.0,
-  'unit_price': 20.0,
-  'daily_sales_estimate': 1.0},
- {'id': 'SS-016',
-  'name': 'TAM Sour Watermelon Slices 113g',
-  'category': 'Sweets / Snacks',
-  'unit': 'unit',
-  'quantity_on_hand': 5.0,
-  'opening_quantity': 5.0,
-  'unit_price': 40.0,
-  'daily_sales_estimate': 1.0},
- {'id': 'SS-017',
-  'name': 'TAM Sour Cola Bottles 113g',
-  'category': 'Sweets / Snacks',
-  'unit': 'unit',
-  'quantity_on_hand': 5.0,
-  'opening_quantity': 5.0,
-  'unit_price': 40.0,
-  'daily_sales_estimate': 1.0},
- {'id': 'SS-018',
-  'name': 'Nestle Bar One Mini 24 x 21g',
-  'category': 'Sweets / Snacks',
-  'unit': 'unit',
-  'quantity_on_hand': 1.0,
-  'opening_quantity': 1.0,
-  'unit_price': 25.0,
-  'daily_sales_estimate': 1.0},
- {'id': 'SS-019',
-  'name': 'Nestle Tex Mini 24 x 18g',
-  'category': 'Sweets / Snacks',
-  'unit': 'unit',
-  'quantity_on_hand': 1.0,
-  'opening_quantity': 1.0,
-  'unit_price': 25.0,
-  'daily_sales_estimate': 1.0},
- {'id': 'SS-020',
-  'name': 'Nestle Kit Kat Mini 2 Finger 24 x 20g',
-  'category': 'Sweets / Snacks',
-  'unit': 'unit',
-  'quantity_on_hand': 1.0,
-  'opening_quantity': 1.0,
-  'unit_price': 25.0,
-  'daily_sales_estimate': 1.0},
- {'id': 'SS-021',
-  'name': 'Skittles Fruits 14 x 38g',
-  'category': 'Sweets / Snacks',
-  'unit': 'unit',
-  'quantity_on_hand': 1.0,
-  'opening_quantity': 1.0,
-  'unit_price': 255.0,
-  'daily_sales_estimate': 1.0},
- {'id': 'AO-002',
-  'name': 'Specials - Dogwalker (Pre Rolls)',
-  'category': 'Accessories / Other',
-  'unit': 'unit',
-  'quantity_on_hand': 9.0,
-  'opening_quantity': 9.0,
-  'unit_price': 150.0,
-  'daily_sales_estimate': 1.0}]
+def parse_deal_text(deal_text: str) -> Optional[Tuple[int, float]]:
+    """Parses simple deal text such as '3 for R100' or '2 for 50'."""
+    if not deal_text:
+        return None
+    match = re.search(r"(\d+)\s*for\s*R?\s*([0-9]+(?:\.[0-9]+)?)", str(deal_text), re.IGNORECASE)
+    if not match:
+        return None
+    qty = safe_int(match.group(1))
+    price = safe_float(match.group(2))
+    if qty <= 0 or price <= 0:
+        return None
+    return qty, price
 
 
-def default_sales() -> List[Dict[str, Any]]:
-    # Live system starts with no demo sales.
-    return []
+def line_total_with_deal(quantity: float, unit_price: float, deal_text: str = "") -> float:
+    deal = parse_deal_text(deal_text)
+    if not deal:
+        return float(quantity) * float(unit_price)
+
+    # Bundle deals are only sensible for whole units.
+    deal_qty, deal_price = deal
+    whole_qty = int(quantity)
+    remainder_fraction = float(quantity) - whole_qty
+    bundles = whole_qty // deal_qty
+    remainder_units = whole_qty % deal_qty
+    return (bundles * deal_price) + (remainder_units * unit_price) + (remainder_fraction * unit_price)
 
 
 # ============================================================
-# Data Persistence
+# JSON Persistence
 # ============================================================
 
 def save_json(path: Path, data: Any) -> None:
     with path.open("w", encoding="utf-8") as file:
-        json.dump(data, file, indent=2)
+        json.dump(data, file, indent=2, ensure_ascii=False)
 
 
 def load_json(path: Path, fallback: Any) -> Any:
     if not path.exists():
         save_json(path, fallback)
         return fallback
-
     try:
         with path.open("r", encoding="utf-8") as file:
             return json.load(file)
     except json.JSONDecodeError:
-        st.warning(f"{path.name} was corrupted or unreadable. A clean starting file has been reloaded.")
+        backup_path = path.with_suffix(f".corrupt_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+        try:
+            path.rename(backup_path)
+            st.warning(f"{path.name} was unreadable. A corrupt copy was saved as {backup_path.name} and a clean file was created.")
+        except Exception:
+            st.warning(f"{path.name} was unreadable. A clean file was created.")
         save_json(path, fallback)
         return fallback
 
 
+# ============================================================
+# Pricing Engine
+# ============================================================
 
-def is_legacy_demo_inventory(data: Any) -> bool:
+class PricingEngine:
     """
-    Detects the earlier placeholder/demo inventory so the first live deployment
-    can seed the new live-lite stock list instead of keeping the old 15 demo rows.
-    It will not overwrite once the live inventory has been edited/saved.
+    Centralised pricing engine.
+
+    Core formula:
+      Fixed Cost Buffer per Unit = (Total Upfront Investment × Overhead Recovery Rate) / Expected Volume
+      Expected Volume = Payback Months × Expected Monthly Units
+      Loaded Unit Cost = Unit Cost Input + Fixed Cost Buffer
+      Suggested Selling Price = Loaded Unit Cost / (1 - Desired Margin % - Risk Buffer %)
     """
-    if not isinstance(data, list) or not data:
-        return False
 
-    legacy_names = {
-        "Purple Punch Pre-Roll",
-        "Gelato Pre-Roll",
-        "Blue Dream Pre-Roll",
-        "Wedding Cake Pre-Roll",
-        "Runtz Pre-Roll",
-        "Purple Punch Flower",
-        "Gelato Flower",
-        "Blue Dream Flower",
-        "Wedding Cake Flower",
-        "Runtz Flower",
-        "Rolling Papers Classic",
-        "Canna Juice Berry",
-        "Canna Juice Citrus",
-        "Premium Grinder",
-        "Refillable Lighter",
-    }
+    def __init__(self, config: Dict[str, Any]):
+        self.config = config
 
-    names = {str(row.get("name", "")).strip() for row in data if isinstance(row, dict)}
+    @staticmethod
+    def default_config() -> Dict[str, Any]:
+        return {
+            "total_upfront_investment": 141600.0,
+            "payback_months": 12.0,
+            "overhead_recovery_rate": 0.10,
+            "default_risk_buffer": 0.05,
+            "default_margin": 0.40,
+            "default_expected_monthly_units": 100.0,
+            "default_rounding": "Round nearest 5",
+        }
 
-    # Also replace the temporary Product 001 / Product 002 placeholder seed
-    # with the real go-live stock list from the latest Saint Herb pricing sheet.
-    placeholder_count = sum(1 for name in names if name.startswith("Product "))
+    @property
+    def total_upfront_investment(self) -> float:
+        return safe_float(self.config.get("total_upfront_investment"), 0.0)
 
-    return bool(names & legacy_names) or placeholder_count >= 10
+    @property
+    def payback_months(self) -> float:
+        return max(safe_float(self.config.get("payback_months"), 1.0), 1.0)
 
+    @property
+    def overhead_recovery_rate(self) -> float:
+        return max(safe_float(self.config.get("overhead_recovery_rate"), 0.0), 0.0)
+
+    @property
+    def default_expected_monthly_units(self) -> float:
+        return max(safe_float(self.config.get("default_expected_monthly_units"), 1.0), 1.0)
+
+    def fixed_cost_buffer(self, expected_monthly_units: Optional[float] = None) -> float:
+        units = safe_float(expected_monthly_units, self.default_expected_monthly_units)
+        units = max(units, 1.0)
+        expected_volume = units * self.payback_months
+        recoverable_cost = self.total_upfront_investment * self.overhead_recovery_rate
+        return recoverable_cost / expected_volume if expected_volume else 0.0
+
+    def calculate(
+        self,
+        unit_cost: float,
+        desired_margin: Optional[float] = None,
+        risk_buffer: Optional[float] = None,
+        expected_monthly_units: Optional[float] = None,
+        rounding: Optional[str] = None,
+    ) -> Dict[str, float]:
+        unit_cost = max(safe_float(unit_cost), 0.0)
+        desired_margin = safe_float(desired_margin, safe_float(self.config.get("default_margin"), 0.40))
+        risk_buffer = safe_float(risk_buffer, safe_float(self.config.get("default_risk_buffer"), 0.05))
+        fixed_buffer = self.fixed_cost_buffer(expected_monthly_units)
+        loaded_cost = unit_cost + fixed_buffer
+        denominator = 1 - desired_margin - risk_buffer
+        suggested = loaded_cost / denominator if denominator > 0 else 0.0
+        rounded = self.round_price(suggested, rounding or self.config.get("default_rounding", "No rounding"))
+        return {
+            "unit_cost": unit_cost,
+            "desired_margin": desired_margin,
+            "risk_buffer": risk_buffer,
+            "fixed_cost_buffer": fixed_buffer,
+            "loaded_unit_cost": loaded_cost,
+            "suggested_selling_price": suggested,
+            "rounded_selling_price": rounded,
+        }
+
+    @staticmethod
+    def round_price(price: float, rounding: str) -> float:
+        price = safe_float(price)
+        if price <= 0:
+            return 0.0
+        if rounding == "No rounding":
+            return round(price, 2)
+        if "5" in rounding:
+            base = 5
+        elif "10" in rounding:
+            base = 10
+        else:
+            base = 1
+        if "up" in rounding.lower():
+            return float(math.ceil(price / base) * base)
+        if "down" in rounding.lower():
+            return float(math.floor(price / base) * base)
+        return float(round(price / base) * base)
+
+
+def load_pricing_config() -> Dict[str, Any]:
+    data = load_json(PRICING_CONFIG_FILE, PricingEngine.default_config())
+    default = PricingEngine.default_config()
+    default.update(data if isinstance(data, dict) else {})
+    return default
+
+
+def save_pricing_config(config: Dict[str, Any]) -> None:
+    save_json(PRICING_CONFIG_FILE, config)
+
+
+# ============================================================
+# Enhanced Pricing Integration
+# ============================================================
+
+def recalculate_product_price(row: Dict[str, Any], engine: PricingEngine, rounding: Optional[str] = None) -> float:
+    """Recalculate the final selling price from a product row using the active PricingEngine.
+
+    This uses the full pricing model, including setup-cost recovery / fixed cost buffer.
+    It is intentionally reusable across Add Product, Edit Product Pricing, and the
+    main Inventory inline editor.
+    """
+    result = engine.calculate(
+        unit_cost=safe_float(row.get("unit_cost")),
+        desired_margin=safe_float(row.get("desired_margin")),
+        risk_buffer=safe_float(row.get("risk_buffer")),
+        expected_monthly_units=safe_float(row.get("expected_monthly_units")),
+        rounding=rounding or str(engine.config.get("default_rounding", "Round nearest 5")),
+    )
+    return safe_float(result.get("rounded_selling_price"))
+
+
+def pricing_inputs_changed(edited_row: Dict[str, Any], original_row: Dict[str, Any]) -> bool:
+    """Return True when fields that drive the pricing model changed.
+
+    The inline inventory editor must not blindly recalculate every product price,
+    otherwise neutral placeholders or manually overridden prices could be overwritten.
+    """
+    pricing_cols = ["unit_cost", "desired_margin", "risk_buffer", "expected_monthly_units"]
+    for col in pricing_cols:
+        if abs(safe_float(edited_row.get(col)) - safe_float(original_row.get(col))) > 1e-9:
+            return True
+    return False
+
+
+def pricing_input_error(row: Dict[str, Any]) -> Optional[str]:
+    """Validate pricing inputs before calculating a selling price."""
+    margin = safe_float(row.get("desired_margin"))
+    risk = safe_float(row.get("risk_buffer"))
+    expected_units = safe_float(row.get("expected_monthly_units"))
+    if margin < 0 or risk < 0:
+        return "margin and risk buffer cannot be negative"
+    if margin + risk >= 1:
+        return "margin plus risk buffer must be below 100%"
+    if expected_units <= 0:
+        return "expected monthly units must be greater than zero"
+    return None
+
+
+# ============================================================
+# Default Data
+# ============================================================
+
+def default_inventory() -> List[Dict[str, Any]]:
+    """
+    Neutral seed data only.
+
+    This version creates all 64 current product placeholder slots:
+    Product 001 through Product 064.
+
+    Notes:
+    - Product names remain generic placeholders so they can be renamed in-app.
+    - Existing saved inventory is not overwritten.
+    - load_inventory() appends any missing placeholder IDs, but keeps any edits already saved.
+    """
+    product_specs = [
+        # product_no, category, unit, quantity, selling_price
+        (1, "Prepared Items", "unit", 25, 125),
+        (2, "Prepared Items", "unit", 25, 125),
+        (3, "Prepared Items", "unit", 25, 65),
+        (4, "Prepared Items", "unit", 25, 65),
+        (5, "Prepared Items", "unit", 25, 65),
+        (6, "Prepared Items", "unit", 21, 0),
+        (7, "Prepared Items", "unit", 28, 0),
+        (8, "Prepared Items", "unit", 31, 0),
+
+        (9, "Bulk / By Weight", "gram", 10, 45),
+        (10, "Bulk / By Weight", "gram", 50, 95),
+        (11, "Bulk / By Weight", "gram", 50, 105),
+        (12, "Bulk / By Weight", "gram", 50, 135),
+        (13, "Bulk / By Weight", "gram", 50, 115),
+        (14, "Bulk / By Weight", "gram", 130, 135),
+        (15, "Bulk / By Weight", "gram", 130, 135),
+        (16, "Bulk / By Weight", "gram", 130, 135),
+
+        (17, "Beverages", "bottle", 6, 115),
+        (18, "Beverages", "bottle", 6, 115),
+        (19, "Beverages", "bottle", 6, 115),
+
+        (20, "Packaged Goods", "unit", 5, 235),
+        (21, "Packaged Goods", "unit", 5, 305),
+        (22, "Packaged Goods", "unit", 5, 235),
+        (23, "Packaged Goods", "unit", 5, 305),
+        (24, "Packaged Goods", "unit", 5, 235),
+        (25, "Packaged Goods", "unit", 5, 305),
+        (26, "Packaged Goods", "unit", 4, 195),
+        (27, "Packaged Goods", "unit", 4, 215),
+        (28, "Packaged Goods", "unit", 4, 235),
+        (29, "Packaged Goods", "unit", 4, 90),
+        (30, "Packaged Goods", "unit", 3, 135),
+        (31, "Beverages", "bottle", 3, 145),
+
+        (32, "Oils & Topicals", "unit", 3, 325),
+        (33, "Oils & Topicals", "unit", 3, 385),
+        (34, "Oils & Topicals", "unit", 3, 325),
+        (35, "Oils & Topicals", "unit", 3, 325),
+        (36, "Oils & Topicals", "unit", 3, 525),
+        (37, "Oils & Topicals", "unit", 3, 325),
+        (38, "Oils & Topicals", "unit", 3, 235),
+        (39, "Oils & Topicals", "unit", 3, 525),
+        (40, "Oils & Topicals", "unit", 3, 385),
+        (41, "Oils & Topicals", "unit", 3, 385),
+
+        (42, "Sweets / Snacks", "unit", 125, 35),
+        (43, "Sweets / Snacks", "unit", 50, 35),
+        (44, "Sweets / Snacks", "unit", 100, 55),
+        (45, "Sweets / Snacks", "unit", 2, 65),
+        (46, "Sweets / Snacks", "unit", 1, 65),
+        (47, "Sweets / Snacks", "unit", 5, 55),
+        (48, "Sweets / Snacks", "unit", 5, 35),
+        (49, "Sweets / Snacks", "unit", 2, 55),
+        (50, "Sweets / Snacks", "unit", 4, 55),
+        (51, "Sweets / Snacks", "unit", 4, 55),
+        (52, "Sweets / Snacks", "unit", 1, 55),
+        (53, "Sweets / Snacks", "unit", 1, 45),
+        (54, "Sweets / Snacks", "unit", 5, 45),
+        (55, "Sweets / Snacks", "unit", 3, 75),
+        (56, "Sweets / Snacks", "unit", 1, 85),
+        (57, "Sweets / Snacks", "unit", 1, 15),
+        (58, "Sweets / Snacks", "unit", 1, 15),
+        (59, "Sweets / Snacks", "unit", 5, 35),
+        (60, "Sweets / Snacks", "unit", 5, 35),
+        (61, "Sweets / Snacks", "unit", 1, 25),
+        (62, "Sweets / Snacks", "unit", 1, 25),
+        (63, "Sweets / Snacks", "unit", 1, 255),
+        (64, "Accessories / Other", "unit", 9, 0),
+    ]
+
+    products: List[Dict[str, Any]] = []
+    for product_no, category, unit, qty, price in product_specs:
+        pid = f"ITM-{product_no:03d}"
+        selling_mode = "Per Gram" if unit == "gram" else "Per Unit"
+        qty_float = float(qty)
+        price_float = float(price)
+        products.append({
+            "id": pid,
+            "name": f"Product {product_no:03d}",
+            "category": category,
+            "unit": unit,
+            "selling_mode": selling_mode,
+            "pack_size": 1.0,
+            "quantity_on_hand": qty_float,
+            "opening_quantity": qty_float,
+            "unit_price": price_float,
+            # Keep unit cost neutral/blank. Update it in Pricing once the actual cost is known.
+            "unit_cost": 0.0,
+            "desired_margin": 0.40,
+            "risk_buffer": 0.05,
+            "expected_monthly_units": max(qty_float, 1.0),
+            "special_deal": "",
+            "daily_sales_estimate": max(qty_float / 14, 1.0),
+        })
+    return products
+
+
+def append_missing_default_products(data: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], bool]:
+    """
+    Adds any missing Product 001-064 placeholders to an existing inventory file.
+
+    This is deliberately non-destructive:
+    - If a product ID already exists, the saved row is kept as-is.
+    - If the owner renamed Product 001, that name is not overwritten.
+    - Only missing placeholder rows are appended.
+    """
+    if not isinstance(data, list):
+        return default_inventory(), True
+
+    existing_ids = {str(item.get("id", "")) for item in data if isinstance(item, dict)}
+    updated = list(data)
+    changed = False
+
+    for placeholder in default_inventory():
+        if placeholder["id"] not in existing_ids:
+            updated.append(placeholder)
+            existing_ids.add(placeholder["id"])
+            changed = True
+
+    return updated, changed
+
+
+def default_sales() -> List[Dict[str, Any]]:
+    return []
+
+
+def default_audit() -> List[Dict[str, Any]]:
+    return []
+
+
+# ============================================================
+# Data Loading and Normalisation
+# ============================================================
 
 def load_inventory() -> pd.DataFrame:
     data = load_json(INVENTORY_FILE, default_inventory())
-
-    if is_legacy_demo_inventory(data):
+    if not isinstance(data, list):
         data = default_inventory()
         save_json(INVENTORY_FILE, data)
-        st.toast("Go-live stock list loaded. Old placeholder inventory was replaced.", icon="✅")
-
+    else:
+        data, placeholders_added = append_missing_default_products(data)
+        if placeholders_added:
+            save_json(INVENTORY_FILE, data)
     df = pd.DataFrame(data)
 
-    expected_cols = ["id", "name", "category", "unit", "quantity_on_hand", "opening_quantity", "unit_price", "daily_sales_estimate"]
-    for col in expected_cols:
+    expected_cols = {
+        "id": "",
+        "name": "",
+        "category": "Accessories / Other",
+        "unit": "unit",
+        "selling_mode": "Per Unit",
+        "pack_size": 1.0,
+        "quantity_on_hand": 0.0,
+        "opening_quantity": None,
+        "unit_price": 0.0,
+        "unit_cost": 0.0,
+        "desired_margin": 0.40,
+        "risk_buffer": 0.05,
+        "expected_monthly_units": 1.0,
+        "special_deal": "",
+        "daily_sales_estimate": 1.0,
+    }
+    for col, default in expected_cols.items():
         if col not in df.columns:
             if col == "opening_quantity" and "quantity_on_hand" in df.columns:
                 df[col] = df["quantity_on_hand"]
-            elif col in ["quantity_on_hand", "opening_quantity", "unit_price", "daily_sales_estimate"]:
-                df[col] = 0.0
             else:
-                df[col] = ""
+                df[col] = default
 
-    df["quantity_on_hand"] = pd.to_numeric(df["quantity_on_hand"], errors="coerce").fillna(0.0)
-    df["opening_quantity"] = pd.to_numeric(df["opening_quantity"], errors="coerce").fillna(df["quantity_on_hand"])
-    df["unit_price"] = pd.to_numeric(df["unit_price"], errors="coerce").fillna(0.0)
-    df["daily_sales_estimate"] = pd.to_numeric(df["daily_sales_estimate"], errors="coerce").replace(0, pd.NA)
-    df["opening_stock_value"] = df["opening_quantity"] * df["unit_price"]
+    numeric_cols = ["quantity_on_hand", "opening_quantity", "unit_price", "unit_cost", "desired_margin", "risk_buffer", "expected_monthly_units", "pack_size", "daily_sales_estimate"]
+    for col in numeric_cols:
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+    df["opening_quantity"] = df["opening_quantity"].fillna(df["quantity_on_hand"])
+    df["daily_sales_estimate"] = df["daily_sales_estimate"].replace(0, pd.NA)
     df["stock_value"] = df["quantity_on_hand"] * df["unit_price"]
+    df["opening_stock_value"] = df["opening_quantity"] * df["unit_price"]
     df["sold_quantity"] = (df["opening_quantity"] - df["quantity_on_hand"]).clip(lower=0)
     df["sold_stock_value"] = df["sold_quantity"] * df["unit_price"]
     df["days_stock_on_hand"] = (df["quantity_on_hand"] / df["daily_sales_estimate"]).fillna(999.0)
@@ -933,211 +681,186 @@ def load_inventory() -> pd.DataFrame:
 
 
 def save_inventory(df: pd.DataFrame) -> None:
-    save_cols = ["id", "name", "category", "unit", "quantity_on_hand", "opening_quantity", "unit_price", "daily_sales_estimate"]
-    clean_df = df[save_cols].copy()
-    clean_df["quantity_on_hand"] = clean_df["quantity_on_hand"].astype(float)
-    clean_df["opening_quantity"] = clean_df["opening_quantity"].astype(float)
-    clean_df["unit_price"] = clean_df["unit_price"].astype(float)
-    clean_df["daily_sales_estimate"] = clean_df["daily_sales_estimate"].astype(float)
-    save_json(INVENTORY_FILE, clean_df.to_dict(orient="records"))
+    save_cols = [
+        "id", "name", "category", "unit", "selling_mode", "pack_size", "quantity_on_hand", "opening_quantity",
+        "unit_price", "unit_cost", "desired_margin", "risk_buffer", "expected_monthly_units", "special_deal", "daily_sales_estimate",
+    ]
+    clean = df.copy()
+    for col in save_cols:
+        if col not in clean.columns:
+            clean[col] = "" if col in ["id", "name", "category", "unit", "selling_mode", "special_deal"] else 0.0
+    save_json(INVENTORY_FILE, clean[save_cols].to_dict(orient="records"))
 
 
-def is_legacy_demo_sales(data: Any) -> bool:
-    """
-    Detects old sample/demo sales from the first prototype.
-    This keeps the live go-live view clean so the system starts with R0.00 sales.
-    It will not clear genuine live sales created from the current Product 001+ stock list.
-    """
-    if not isinstance(data, list) or not data:
-        return False
-
-    legacy_names = {
-        "Purple Punch Pre-Roll",
-        "Gelato Pre-Roll",
-        "Blue Dream Pre-Roll",
-        "Wedding Cake Pre-Roll",
-        "Runtz Pre-Roll",
-        "Purple Punch Flower",
-        "Gelato Flower",
-        "Blue Dream Flower",
-        "Wedding Cake Flower",
-        "Runtz Flower",
-        "Rolling Papers Classic",
-        "Canna Juice Berry",
-        "Canna Juice Citrus",
-        "Premium Grinder",
-        "Refillable Lighter",
-    }
-
-    for sale in data:
-        if not isinstance(sale, dict):
-            continue
-        for item in sale.get("items", []):
-            item_name = str(item.get("name", "")).strip()
-            if item_name in legacy_names:
-                return True
-            if item_name.startswith("Product "):
-                return True
-    return False
+def normalise_sale(sale: Dict[str, Any]) -> Dict[str, Any]:
+    sale = copy.deepcopy(sale)
+    sale.setdefault("sale_id", make_id("SALE"))
+    sale.setdefault("timestamp", now_string())
+    sale.setdefault("payment_method", "Other")
+    sale.setdefault("items", [])
+    sale.setdefault("status", "active")
+    sale.setdefault("modification_history", [])
+    sale.setdefault("created_at", sale.get("timestamp", now_string()))
+    sale.setdefault("total", sum(safe_float(item.get("line_total")) for item in sale.get("items", [])))
+    return sale
 
 
 def load_sales() -> List[Dict[str, Any]]:
     data = load_json(SALES_FILE, default_sales())
-
-    if is_legacy_demo_sales(data):
+    if not isinstance(data, list):
         data = []
         save_json(SALES_FILE, data)
-        st.toast("Old demo sales were cleared. Live sales now start from zero.", icon="✅")
-
-    return data
+    return [normalise_sale(sale) for sale in data if isinstance(sale, dict)]
 
 
 def save_sales(sales: List[Dict[str, Any]]) -> None:
-    save_json(SALES_FILE, sales)
+    save_json(SALES_FILE, [normalise_sale(sale) for sale in sales])
 
+
+def load_audit() -> List[Dict[str, Any]]:
+    data = load_json(AUDIT_FILE, default_audit())
+    return data if isinstance(data, list) else []
+
+
+def save_audit(audit: List[Dict[str, Any]]) -> None:
+    save_json(AUDIT_FILE, audit)
+
+
+def append_audit(action: str, sale_id: str, bartender: str, reason: str, before: Any = None, after: Any = None, metadata: Optional[Dict[str, Any]] = None) -> None:
+    audit = load_audit()
+    audit.append({
+        "audit_id": make_id("AUDIT"),
+        "timestamp": now_string(),
+        "action": action,
+        "sale_id": sale_id,
+        "bartender": bartender,
+        "reason": reason,
+        "before": before,
+        "after": after,
+        "metadata": metadata or {},
+    })
+    save_audit(audit)
 
 
 # ============================================================
-# Session State
+# Monthly Editing / Void Lock Logic
 # ============================================================
 
-def init_state() -> None:
-    if "cart" not in st.session_state:
-        st.session_state.cart = {}
-    if "new_sale_started" not in st.session_state:
-        st.session_state.new_sale_started = False
-    if "last_receipt" not in st.session_state:
-        st.session_state.last_receipt = None
+def edit_window_for_sale(sale_timestamp: Any) -> Tuple[Optional[datetime], Optional[datetime]]:
+    sale_dt = parse_dt(sale_timestamp)
+    if not sale_dt:
+        return None, None
+    start = datetime.combine(date(sale_dt.year, sale_dt.month, 2), time.min)
+    if sale_dt.month == 12:
+        next_month = date(sale_dt.year + 1, 1, 1)
+    else:
+        next_month = date(sale_dt.year, sale_dt.month + 1, 1)
+    end = datetime.combine(next_month, time.max)
+    return start, end
+
+
+def can_modify_sale(sale: Dict[str, Any], now: Optional[datetime] = None) -> Tuple[bool, str]:
+    now = now or datetime.now()
+    if sale.get("status") == "voided":
+        return False, "This sale is already voided and cannot be edited again."
+    start, end = edit_window_for_sale(sale.get("timestamp"))
+    if not start or not end:
+        return False, "This sale has an invalid timestamp, so editing/voiding is blocked."
+    if now < start:
+        return False, f"This sale can only be edited/voided from {start.strftime('%Y-%m-%d %H:%M')} onwards."
+    if now > end:
+        return False, f"Editing/voiding is closed for this sale. The window ended on {end.strftime('%Y-%m-%d %H:%M')}."
+    return True, f"Open for editing/voiding until {end.strftime('%Y-%m-%d %H:%M')}."
 
 
 # ============================================================
-# Components
+# Reporting Helpers
 # ============================================================
-
-def hero(title: str, subtitle: str) -> None:
-    st.markdown(
-        f"""
-        <div class="saint-hero">
-            <div class="saint-hero-title">{title}</div>
-            <div class="saint-hero-subtitle">{subtitle}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-def metric_card(label: str, value: str, help_text: str = "") -> None:
-    st.markdown(
-        f"""
-        <div class="metric-card">
-            <div class="metric-label">{label}</div>
-            <div class="metric-value">{value}</div>
-            <div class="metric-help">{help_text}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
 
 def inventory_display_df(df: pd.DataFrame) -> pd.DataFrame:
     output = df.copy()
     output["Product"] = output["name"]
     output["Category"] = output["category"]
     output["Unit"] = output["unit"]
+    output["Mode"] = output["selling_mode"]
     output["Qty"] = output["quantity_on_hand"].round(2)
+    output["Cost (R)"] = output["unit_cost"].round(2)
     output["Price (R)"] = output["unit_price"].round(2)
-    output["Opening Value (R)"] = output["opening_stock_value"].round(2)
-    output["Current Value (R)"] = output["stock_value"].round(2)
-    output["Value Sold (R)"] = output["sold_stock_value"].round(2)
+    output["Stock Value (R)"] = output["stock_value"].round(2)
     output["Days on Hand"] = output["days_stock_on_hand"].round(1)
+    output["Deal"] = output["special_deal"].fillna("")
     output["Status"] = output["status"]
-    return output[["Product", "Category", "Unit", "Qty", "Price (R)", "Opening Value (R)", "Current Value (R)", "Value Sold (R)", "Days on Hand", "Status"]]
+    return output[["Product", "Category", "Unit", "Mode", "Qty", "Cost (R)", "Price (R)", "Stock Value (R)", "Days on Hand", "Deal", "Status"]]
 
 
-def sales_to_dataframe(sales: List[Dict[str, Any]]) -> pd.DataFrame:
+def sales_to_dataframe(sales: List[Dict[str, Any]], include_voided: bool = True) -> pd.DataFrame:
     rows = []
     for sale in sales:
-        rows.append(
-            {
-                "Sale ID": sale.get("sale_id", ""),
-                "Timestamp": sale.get("timestamp", ""),
-                "Payment Method": sale.get("payment_method", ""),
-                "Items": ", ".join([f"{item['name']} x {item['quantity']:g}" for item in sale.get("items", [])]),
-                "Total (R)": float(sale.get("total", 0.0)),
-            }
-        )
+        sale = normalise_sale(sale)
+        if not include_voided and sale.get("status") == "voided":
+            continue
+        rows.append({
+            "Sale ID": sale.get("sale_id", ""),
+            "Timestamp": sale.get("timestamp", ""),
+            "Status": sale.get("status", "active"),
+            "Payment Method": sale.get("payment_method", ""),
+            "Items": ", ".join([f"{item.get('name', '')} x {safe_float(item.get('quantity')):g}" for item in sale.get("items", [])]),
+            "Total (R)": safe_float(sale.get("total")),
+            "Modified Count": len(sale.get("modification_history", [])),
+        })
     return pd.DataFrame(rows)
 
 
-def sale_items_to_dataframe(sales: List[Dict[str, Any]]) -> pd.DataFrame:
+def sale_items_to_dataframe(sales: List[Dict[str, Any]], include_voided: bool = False) -> pd.DataFrame:
     rows = []
     for sale in sales:
+        sale = normalise_sale(sale)
+        if sale.get("status") == "voided" and not include_voided:
+            continue
         timestamp = sale.get("timestamp", "")
-        sale_date = timestamp[:10]
+        sale_date = str(timestamp)[:10]
         for item in sale.get("items", []):
-            rows.append(
-                {
-                    "sale_id": sale.get("sale_id", ""),
-                    "timestamp": timestamp,
-                    "date": sale_date,
-                    "product_id": item.get("product_id", ""),
-                    "name": item.get("name", ""),
-                    "quantity": float(item.get("quantity", 0.0)),
-                    "unit_price": float(item.get("unit_price", 0.0)),
-                    "line_total": float(item.get("line_total", 0.0)),
-                    "payment_method": sale.get("payment_method", ""),
-                }
-            )
+            rows.append({
+                "sale_id": sale.get("sale_id", ""),
+                "timestamp": timestamp,
+                "date": sale_date,
+                "status": sale.get("status", "active"),
+                "product_id": item.get("product_id", ""),
+                "name": item.get("name", ""),
+                "quantity": safe_float(item.get("quantity")),
+                "unit_price": safe_float(item.get("unit_price")),
+                "line_total": safe_float(item.get("line_total")),
+                "payment_method": sale.get("payment_method", ""),
+            })
     return pd.DataFrame(rows)
 
 
 def stock_valuation_summary(inventory: pd.DataFrame, sales: List[Dict[str, Any]]) -> Dict[str, float]:
-    """
-    Stock valuation rules for the live-lite version:
-
-    - When no sales have been logged yet, the only meaningful money value is
-      the Total Stock Value.
-    - Once sales start, the app also shows:
-        * Total Sales Value
-        * Value Balance = Opening Stock Value less logged sales
-        * Current Stock Value = remaining stock on hand at current selling price
-    """
+    active_sales = [s for s in sales if normalise_sale(s).get("status") != "voided"]
     opening_stock_value = float(inventory["opening_stock_value"].sum()) if "opening_stock_value" in inventory.columns else 0.0
     current_stock_value = float(inventory["stock_value"].sum()) if "stock_value" in inventory.columns else 0.0
-    total_sales_value = float(sum(float(sale.get("total", 0.0)) for sale in sales))
-
-    today_sales_value = 0.0
-    sales_count_today = 0
-    for sale in sales:
-        if str(sale.get("timestamp", ""))[:10] == today_string():
-            today_sales_value += float(sale.get("total", 0.0))
-            sales_count_today += 1
-
+    total_sales_value = float(sum(safe_float(sale.get("total")) for sale in active_sales))
+    today_sales_value = sum(safe_float(sale.get("total")) for sale in active_sales if str(sale.get("timestamp", ""))[:10] == today_string())
     return {
         "opening_stock_value": opening_stock_value,
         "current_stock_value": current_stock_value,
         "total_sales_value": total_sales_value,
         "today_sales_value": today_sales_value,
-        "sales_count": len(sales),
-        "sales_count_today": sales_count_today,
+        "sales_count": len(active_sales),
         "value_balance_less_sales": opening_stock_value - total_sales_value,
-        "has_sales": total_sales_value > 0 or len(sales) > 0,
+        "has_sales": len(active_sales) > 0,
     }
 
 
 def build_backup_zip(inventory: pd.DataFrame, sales: List[Dict[str, Any]], only_today: bool = False) -> bytes:
-    """
-    Creates a downloadable backup pack containing inventory, sales and raw JSON.
-    This is the daily safety net while the app is still using lightweight local storage.
-    """
-    sales_df = sales_to_dataframe(sales)
-    items_df = sale_items_to_dataframe(sales)
+    sales_df = sales_to_dataframe(sales, include_voided=True)
+    items_df = sale_items_to_dataframe(sales, include_voided=True)
+    audit_df = pd.DataFrame(load_audit())
 
     if not sales_df.empty:
         sales_df["Date"] = pd.to_datetime(sales_df["Timestamp"], errors="coerce").dt.date
     if not items_df.empty:
         items_df["date_parsed"] = pd.to_datetime(items_df["date"], errors="coerce").dt.date
-
     if only_today:
         today = date.today()
         if not sales_df.empty:
@@ -1145,219 +868,125 @@ def build_backup_zip(inventory: pd.DataFrame, sales: List[Dict[str, Any]], only_
         if not items_df.empty:
             items_df = items_df[items_df["date_parsed"] == today].copy()
 
-    inventory_export = inventory_display_df(inventory)
     buffer = io.BytesIO()
-
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("inventory_current.csv", inventory_export.to_csv(index=False))
+        zf.writestr("inventory_current.csv", inventory_display_df(inventory).to_csv(index=False))
         zf.writestr("sales_summary.csv", sales_df.to_csv(index=False))
         zf.writestr("sales_line_items.csv", items_df.to_csv(index=False))
-        zf.writestr("raw_inventory.json", inventory[["id", "name", "category", "unit", "quantity_on_hand", "opening_quantity", "unit_price", "daily_sales_estimate"]].to_json(orient="records", indent=2))
-        zf.writestr("raw_sales.json", json.dumps(sales, indent=2))
+        zf.writestr("audit_trail.csv", audit_df.to_csv(index=False))
+        zf.writestr("raw_inventory.json", inventory.to_json(orient="records", indent=2))
+        zf.writestr("raw_sales.json", json.dumps(sales, indent=2, ensure_ascii=False))
+        zf.writestr("raw_audit.json", json.dumps(load_audit(), indent=2, ensure_ascii=False))
+        zf.writestr("pricing_config.json", json.dumps(load_pricing_config(), indent=2))
         zf.writestr("backup_notes.txt", f"Saint Herb backup created at {now_string()}\nOnly today: {only_today}\n")
-
     buffer.seek(0)
     return buffer.getvalue()
 
 
 # ============================================================
-# Dashboard
+# UI Components
 # ============================================================
 
-def page_dashboard(inventory: pd.DataFrame, sales: List[Dict[str, Any]]) -> None:
-    hero(
-        "Saint Herb Command Centre",
-        "Premium inventory visibility, live retail performance, and stock control in one clean operating view.",
-    )
+def hero(title: str, subtitle: str) -> None:
+    st.markdown(f"""
+    <div class="saint-hero">
+        <div class="saint-hero-title">{title}</div>
+        <div class="saint-hero-subtitle">{subtitle}</div>
+    </div>
+    """, unsafe_allow_html=True)
 
-    sales_df = sales_to_dataframe(sales)
-    items_df = sale_items_to_dataframe(sales)
-    valuation = stock_valuation_summary(inventory, sales)
 
-    total_stock_value = valuation["current_stock_value"]
-    low_stock_items = int((inventory["status"] == "Low").sum())
-    avg_days = inventory["days_stock_on_hand"].replace(999, pd.NA).dropna().mean()
-    avg_days = 0 if pd.isna(avg_days) else avg_days
-
-    if not valuation["has_sales"]:
-        # Clean go-live view: no sales yet, so show only one money amount.
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            metric_card("Total Stock Value", money(total_stock_value), "Current value of all stock loaded")
-        with col2:
-            metric_card("Sales Count", "0", "No sales have been logged yet")
-        with col3:
-            metric_card("Low Stock Items", str(low_stock_items), "Items with fewer than 10 days on hand")
-        with col4:
-            metric_card("Avg Days on Hand", f"{avg_days:,.1f}", "Based on daily sales estimates")
-    else:
-        # Once trading starts, show the full sales/stock movement picture.
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            metric_card("Opening Stock Value", money(valuation["opening_stock_value"]), "Loaded stock value before sales")
-        with col2:
-            metric_card("Total Sales", money(valuation["total_sales_value"]), "All logged sales")
-        with col3:
-            metric_card("Value Balance", money(valuation["value_balance_less_sales"]), "Opening stock value less logged sales")
-        with col4:
-            metric_card("Current Stock Value", money(valuation["current_stock_value"]), "Remaining stock value after deductions")
-
-        col5, col6, col7 = st.columns(3)
-        with col5:
-            metric_card("Today's Sales", money(valuation["today_sales_value"]), f"Sales date: {today_string()}")
-        with col6:
-            metric_card("Low Stock Items", str(low_stock_items), "Items with fewer than 10 days on hand")
-        with col7:
-            metric_card("Avg Days on Hand", f"{avg_days:,.1f}", "Based on daily sales estimates")
-
-    st.divider()
-
-    c1, c2 = st.columns([1.1, 1])
-    with c1:
-        st.subheader("Current Stock Value by Category")
-        category_stock = inventory.groupby("category", as_index=False)["stock_value"].sum()
-        fig = px.bar(
-            category_stock,
-            x="category",
-            y="stock_value",
-            text_auto=".2s",
-            labels={"category": "Category", "stock_value": "Stock Value (R)"},
-            height=420,
-        )
-        fig.update_layout(margin=dict(l=10, r=10, t=30, b=10))
-        st.plotly_chart(fig, width="stretch")
-
-    with c2:
-        st.subheader("Recent Sales Trend")
-        if sales_df.empty:
-            st.info("No sales have been logged yet.")
-        else:
-            sales_df["Date"] = pd.to_datetime(sales_df["Timestamp"], errors="coerce").dt.date
-            daily_sales = sales_df.groupby("Date", as_index=False)["Total (R)"].sum()
-            fig = px.line(
-                daily_sales,
-                x="Date",
-                y="Total (R)",
-                markers=True,
-                labels={"Total (R)": "Sales (R)"},
-                height=420,
-            )
-            fig.update_layout(margin=dict(l=10, r=10, t=30, b=10))
-            st.plotly_chart(fig, width="stretch")
-
-    st.subheader("Top Selling Products")
-    if items_df.empty:
-        st.info("No product-level sales data yet.")
-    else:
-        top_products = (
-            items_df.groupby("name", as_index=False)
-            .agg(quantity=("quantity", "sum"), sales=("line_total", "sum"))
-            .sort_values("sales", ascending=False)
-            .head(10)
-        )
-        fig = px.bar(
-            top_products,
-            x="sales",
-            y="name",
-            orientation="h",
-            text_auto=".2s",
-            labels={"sales": "Sales (R)", "name": "Product"},
-            height=420,
-        )
-        fig.update_layout(yaxis={"categoryorder": "total ascending"}, margin=dict(l=10, r=10, t=30, b=10))
-        st.plotly_chart(fig, width="stretch")
+def metric_card(label: str, value: str, help_text: str = "") -> None:
+    st.markdown(f"""
+    <div class="metric-card">
+        <div class="metric-label">{label}</div>
+        <div class="metric-value">{value}</div>
+        <div class="metric-help">{help_text}</div>
+    </div>
+    """, unsafe_allow_html=True)
 
 
 # ============================================================
-# Point of Sale
+# POS Logic
 # ============================================================
 
 def add_to_cart(product: pd.Series, quantity: float) -> None:
     if quantity <= 0:
         st.toast("Quantity must be greater than zero.", icon="⚠️")
         return
-
-    unit_price = float(product["unit_price"])
+    unit_price = safe_float(product.get("unit_price"))
     if unit_price <= 0:
-        st.toast("This product has no selling price yet. Update the price in Inventory before selling.", icon="⚠️")
+        st.toast("This product has no selling price yet. Update pricing before selling.", icon="⚠️")
         return
-
     product_id = str(product["id"])
-    available = float(product["quantity_on_hand"])
-    current_qty = float(st.session_state.cart.get(product_id, {}).get("quantity", 0.0))
-
+    available = safe_float(product.get("quantity_on_hand"))
+    current_qty = safe_float(st.session_state.cart.get(product_id, {}).get("quantity"))
     if current_qty + quantity > available:
         st.toast("Not enough stock available for that quantity.", icon="⚠️")
         return
-
     if product_id not in st.session_state.cart:
         st.session_state.cart[product_id] = {
             "product_id": product_id,
-            "name": str(product["name"]),
-            "category": str(product["category"]),
-            "unit": str(product["unit"]),
+            "name": str(product.get("name", "")),
+            "category": str(product.get("category", "")),
+            "unit": str(product.get("unit", "unit")),
             "quantity": 0.0,
-            "unit_price": float(product["unit_price"]),
+            "unit_price": unit_price,
+            "special_deal": str(product.get("special_deal", "") or ""),
         }
-
     st.session_state.cart[product_id]["quantity"] += float(quantity)
-    st.toast(f"Added {quantity:g} {product['unit']} of {product['name']}", icon="✅")
+    st.toast(f"Added {quantity:g} {product.get('unit', 'unit')} of {product.get('name', '')}", icon="✅")
 
 
 def cart_total() -> float:
-    return sum(item["quantity"] * item["unit_price"] for item in st.session_state.cart.values())
+    return sum(line_total_with_deal(item["quantity"], item["unit_price"], item.get("special_deal", "")) for item in st.session_state.cart.values())
 
 
 def conclude_sale(inventory: pd.DataFrame, payment_method: str) -> bool:
     if not st.session_state.cart:
         st.warning("Your cart is empty.")
         return False
-
     updated_inventory = inventory.copy()
     sale_items = []
-
     for product_id, cart_item in st.session_state.cart.items():
-        idx = updated_inventory.index[updated_inventory["id"] == product_id]
+        idx = updated_inventory.index[updated_inventory["id"].astype(str) == str(product_id)]
         if len(idx) == 0:
             st.error(f"Product not found: {cart_item['name']}")
             return False
-
         idx = idx[0]
-        available = float(updated_inventory.loc[idx, "quantity_on_hand"])
-        quantity = float(cart_item["quantity"])
-
+        available = safe_float(updated_inventory.loc[idx, "quantity_on_hand"])
+        quantity = safe_float(cart_item.get("quantity"))
         if quantity <= 0:
             st.error("Invalid quantity found in cart.")
             return False
-
         if quantity > available:
             st.error(f"Insufficient stock for {cart_item['name']}. Available: {available:g}")
             return False
-
         updated_inventory.loc[idx, "quantity_on_hand"] = available - quantity
-        line_total = quantity * float(cart_item["unit_price"])
-        sale_items.append(
-            {
-                "product_id": product_id,
-                "name": cart_item["name"],
-                "quantity": quantity,
-                "unit_price": float(cart_item["unit_price"]),
-                "line_total": line_total,
-            }
-        )
-
+        line_total = line_total_with_deal(quantity, cart_item["unit_price"], cart_item.get("special_deal", ""))
+        sale_items.append({
+            "product_id": product_id,
+            "name": cart_item["name"],
+            "quantity": quantity,
+            "unit_price": safe_float(cart_item["unit_price"]),
+            "line_total": line_total,
+            "special_deal": cart_item.get("special_deal", ""),
+        })
     save_inventory(updated_inventory)
     sales = load_sales()
-    sale_record = {
+    sale_record = normalise_sale({
         "sale_id": make_id("SALE"),
         "timestamp": now_string(),
+        "created_at": now_string(),
         "payment_method": payment_method,
         "items": sale_items,
         "total": sum(item["line_total"] for item in sale_items),
-    }
+        "status": "active",
+        "modification_history": [],
+    })
     sales.append(sale_record)
     save_sales(sales)
-
+    append_audit("SALE_CREATED", sale_record["sale_id"], "System", "Sale concluded through POS", before=None, after=sale_record)
     st.session_state.last_receipt = sale_record
     st.session_state.cart = {}
     st.toast("Sale concluded successfully.", icon="✅")
@@ -1367,541 +996,738 @@ def conclude_sale(inventory: pd.DataFrame, payment_method: str) -> bool:
 def render_receipt(sale: Dict[str, Any]) -> None:
     st.success("Sale completed. Receipt preview:")
     st.markdown(f"**Receipt:** `{sale['sale_id']}`  \n**Time:** {sale['timestamp']}  \n**Payment:** {sale['payment_method']}")
-
     receipt_df = pd.DataFrame(sale["items"])
-    receipt_df["quantity"] = receipt_df["quantity"].map(lambda x: f"{x:g}")
-    receipt_df["unit_price"] = receipt_df["unit_price"].map(money)
-    receipt_df["line_total"] = receipt_df["line_total"].map(money)
-    receipt_df = receipt_df.rename(
-        columns={
-            "name": "Product",
-            "quantity": "Qty",
-            "unit_price": "Price",
-            "line_total": "Line Total",
-        }
-    )
-    st.dataframe(receipt_df[["Product", "Qty", "Price", "Line Total"]], width="stretch", hide_index=True)
-    st.markdown(f"### Grand Total: {money(float(sale['total']))}")
+    if not receipt_df.empty:
+        receipt_df["quantity"] = receipt_df["quantity"].map(lambda x: f"{safe_float(x):g}")
+        receipt_df["unit_price"] = receipt_df["unit_price"].map(money)
+        receipt_df["line_total"] = receipt_df["line_total"].map(money)
+        receipt_df = receipt_df.rename(columns={"name": "Product", "quantity": "Qty", "unit_price": "Price", "line_total": "Line Total", "special_deal": "Deal"})
+        cols = [c for c in ["Product", "Qty", "Price", "Deal", "Line Total"] if c in receipt_df.columns]
+        st.dataframe(receipt_df[cols], use_container_width=True, hide_index=True)
+    st.markdown(f"### Grand Total: {money(safe_float(sale['total']))}")
+
+
+# ============================================================
+# Sale Edit / Void Logic
+# ============================================================
+
+def restore_stock_for_items(inventory: pd.DataFrame, items: List[Dict[str, Any]]) -> pd.DataFrame:
+    updated = inventory.copy()
+    for item in items:
+        product_id = str(item.get("product_id", ""))
+        qty = safe_float(item.get("quantity"))
+        idx = updated.index[updated["id"].astype(str) == product_id]
+        if len(idx) > 0:
+            updated.loc[idx[0], "quantity_on_hand"] = safe_float(updated.loc[idx[0], "quantity_on_hand"]) + qty
+    return updated
+
+
+def apply_stock_delta_for_edit(inventory: pd.DataFrame, original_items: List[Dict[str, Any]], edited_items: List[Dict[str, Any]]) -> Tuple[bool, str, pd.DataFrame]:
+    updated = inventory.copy()
+    old_qty = {str(i.get("product_id")): safe_float(i.get("quantity")) for i in original_items}
+    new_qty = {str(i.get("product_id")): safe_float(i.get("quantity")) for i in edited_items}
+    all_ids = set(old_qty) | set(new_qty)
+    for product_id in all_ids:
+        delta = new_qty.get(product_id, 0.0) - old_qty.get(product_id, 0.0)
+        idx = updated.index[updated["id"].astype(str) == product_id]
+        if len(idx) == 0:
+            return False, f"Product {product_id} was not found in inventory.", updated
+        current = safe_float(updated.loc[idx[0], "quantity_on_hand"])
+        if delta > current:
+            name = str(updated.loc[idx[0], "name"])
+            return False, f"Not enough stock to increase sale quantity for {name}. Available: {current:g}; extra needed: {delta:g}.", updated
+        updated.loc[idx[0], "quantity_on_hand"] = current - delta
+    return True, "Stock adjusted.", updated
+
+
+def void_sale(sale_id: str, bartender: str, reason: str) -> Tuple[bool, str]:
+    sales = load_sales()
+    inventory = load_inventory()
+    for i, sale in enumerate(sales):
+        if sale.get("sale_id") != sale_id:
+            continue
+        allowed, msg = can_modify_sale(sale)
+        if not allowed:
+            return False, msg
+        if not bartender.strip() or not reason.strip():
+            return False, "Bartender full name and reason are required."
+        before = copy.deepcopy(sale)
+        inventory = restore_stock_for_items(inventory, sale.get("items", []))
+        sale["status"] = "voided"
+        sale["voided_at"] = now_string()
+        sale["voided_by"] = bartender.strip()
+        sale["void_reason"] = reason.strip()
+        sale.setdefault("modification_history", []).append({
+            "action": "VOID",
+            "timestamp": now_string(),
+            "bartender": bartender.strip(),
+            "reason": reason.strip(),
+            "original_record": before,
+        })
+        sales[i] = sale
+        save_inventory(inventory)
+        save_sales(sales)
+        append_audit("SALE_VOIDED", sale_id, bartender.strip(), reason.strip(), before=before, after=sale)
+        return True, "Sale voided and stock restored."
+    return False, "Sale not found."
+
+
+def edit_sale(sale_id: str, edited_items: List[Dict[str, Any]], new_payment_method: str, bartender: str, reason: str) -> Tuple[bool, str]:
+    sales = load_sales()
+    inventory = load_inventory()
+    for i, sale in enumerate(sales):
+        if sale.get("sale_id") != sale_id:
+            continue
+        allowed, msg = can_modify_sale(sale)
+        if not allowed:
+            return False, msg
+        if not bartender.strip() or not reason.strip():
+            return False, "Bartender full name and reason are required."
+        before = copy.deepcopy(sale)
+        ok, stock_msg, updated_inventory = apply_stock_delta_for_edit(inventory, sale.get("items", []), edited_items)
+        if not ok:
+            return False, stock_msg
+        new_total = sum(safe_float(item.get("line_total")) for item in edited_items)
+        sale["items"] = edited_items
+        sale["payment_method"] = new_payment_method
+        sale["total"] = new_total
+        sale["last_edited_at"] = now_string()
+        sale["last_edited_by"] = bartender.strip()
+        sale.setdefault("modification_history", []).append({
+            "action": "EDIT",
+            "timestamp": now_string(),
+            "bartender": bartender.strip(),
+            "reason": reason.strip(),
+            "original_record": before,
+            "updated_items": edited_items,
+        })
+        sales[i] = sale
+        save_inventory(updated_inventory)
+        save_sales(sales)
+        append_audit("SALE_EDITED", sale_id, bartender.strip(), reason.strip(), before=before, after=sale)
+        return True, "Sale edited and stock adjusted."
+    return False, "Sale not found."
+
+
+# ============================================================
+# Pages
+# ============================================================
+
+def page_dashboard(inventory: pd.DataFrame, sales: List[Dict[str, Any]]) -> None:
+    hero("Saint Herb Command Centre", "Premium inventory visibility, live retail performance, and stock control in one clean operating view.")
+    valuation = stock_valuation_summary(inventory, sales)
+    low_stock_items = int((inventory["status"] == "Low").sum())
+    avg_days = inventory["days_stock_on_hand"].replace(999, pd.NA).dropna().mean()
+    avg_days = 0 if pd.isna(avg_days) else avg_days
+
+    if not valuation["has_sales"]:
+        col1, col2, col3, col4 = st.columns(4)
+        with col1: metric_card("Total Stock Value", money(valuation["current_stock_value"]), "Current value of all stock loaded")
+        with col2: metric_card("Sales Count", "0", "No active sales have been logged yet")
+        with col3: metric_card("Low Stock Items", str(low_stock_items), "Items with fewer than 10 days on hand")
+        with col4: metric_card("Avg Days on Hand", f"{avg_days:,.1f}", "Based on daily sales estimates")
+    else:
+        col1, col2, col3, col4 = st.columns(4)
+        with col1: metric_card("Opening Stock Value", money(valuation["opening_stock_value"]), "Loaded stock value before sales")
+        with col2: metric_card("Total Sales", money(valuation["total_sales_value"]), "All active logged sales")
+        with col3: metric_card("Value Balance", money(valuation["value_balance_less_sales"]), "Opening stock value less active sales")
+        with col4: metric_card("Current Stock Value", money(valuation["current_stock_value"]), "Remaining stock value after deductions")
+
+    st.divider()
+    c1, c2 = st.columns([1.1, 1])
+    with c1:
+        st.subheader("Current Stock Value by Category")
+        category_stock = inventory.groupby("category", as_index=False)["stock_value"].sum()
+        fig = px.bar(category_stock, x="category", y="stock_value", text_auto=".2s", labels={"category": "Category", "stock_value": "Stock Value (R)"}, height=420)
+        fig.update_layout(margin=dict(l=10, r=10, t=30, b=10))
+        st.plotly_chart(fig, use_container_width=True)
+    with c2:
+        st.subheader("Recent Sales Trend")
+        sales_df = sales_to_dataframe(sales, include_voided=False)
+        if sales_df.empty:
+            st.info("No sales have been logged yet.")
+        else:
+            sales_df["Date"] = pd.to_datetime(sales_df["Timestamp"], errors="coerce").dt.date
+            daily_sales = sales_df.groupby("Date", as_index=False)["Total (R)"].sum()
+            fig = px.line(daily_sales, x="Date", y="Total (R)", markers=True, height=420)
+            fig.update_layout(margin=dict(l=10, r=10, t=30, b=10))
+            st.plotly_chart(fig, use_container_width=True)
+
+    st.subheader("Top Selling Products")
+    items_df = sale_items_to_dataframe(sales, include_voided=False)
+    if items_df.empty:
+        st.info("No product-level sales data yet.")
+    else:
+        top = items_df.groupby("name", as_index=False).agg(quantity=("quantity", "sum"), sales=("line_total", "sum")).sort_values("sales", ascending=False).head(10)
+        fig = px.bar(top, x="sales", y="name", orientation="h", text_auto=".2s", height=420, labels={"sales": "Sales (R)", "name": "Product"})
+        fig.update_layout(yaxis={"categoryorder": "total ascending"}, margin=dict(l=10, r=10, t=30, b=10))
+        st.plotly_chart(fig, use_container_width=True)
 
 
 def page_pos(inventory: pd.DataFrame) -> None:
-    hero(
-        "Point of Sale",
-        "Fast checkout, live stock deduction, clean cart handling, and instant receipt preview.",
-    )
-
-    top1, top2, top3 = st.columns([1, 1, 2])
+    hero("Point of Sale", "Fast checkout, live stock deduction, deal-aware cart totals, and instant receipt preview.")
+    top1, top2, _ = st.columns([1, 1, 2])
     with top1:
-        if st.button("➕ New Sale", type="primary", width="stretch"):
+        if st.button("➕ New Sale", type="primary", use_container_width=True):
             st.session_state.cart = {}
-            st.session_state.new_sale_started = True
             st.toast("New sale started.", icon="🛒")
     with top2:
-        if st.button("Clear Cart", width="stretch"):
+        if st.button("Clear Cart", use_container_width=True):
             st.session_state.cart = {}
             st.toast("Cart cleared.", icon="🧹")
-
     st.divider()
 
     left, right = st.columns([1.65, 1], gap="large")
-
     with left:
         st.subheader("Catalog")
         search = st.text_input("Search product", placeholder="Search by product name or category...", label_visibility="collapsed")
-
         tab_labels = ["All"] + CATEGORIES
         tabs = st.tabs(tab_labels)
-
         for tab, category_filter in zip(tabs, tab_labels):
             with tab:
                 filtered = inventory.copy()
                 if category_filter != "All":
                     filtered = filtered[filtered["category"] == category_filter]
-
                 if search:
-                    search_lower = search.lower()
-                    filtered = filtered[
-                        filtered["name"].str.lower().str.contains(search_lower, na=False)
-                        | filtered["category"].str.lower().str.contains(search_lower, na=False)
-                    ]
-
+                    s = search.lower()
+                    filtered = filtered[filtered["name"].str.lower().str.contains(s, na=False) | filtered["category"].str.lower().str.contains(s, na=False)]
                 if filtered.empty:
                     st.info("No products match the current filters.")
                     continue
-
-                cols_per_row = 3
-                rows = [filtered.iloc[i : i + cols_per_row] for i in range(0, len(filtered), cols_per_row)]
-
+                rows = [filtered.iloc[i:i + 3] for i in range(0, len(filtered), 3)]
                 for row in rows:
-                    cols = st.columns(cols_per_row)
+                    cols = st.columns(3)
                     for col, (_, product) in zip(cols, row.iterrows()):
                         with col:
-                            st.markdown(
-                                f"""
-                                <div class="product-card">
-                                    <div class="product-icon">{icon_for_category(product['category'])}</div>
-                                    <div class="product-name">{product['name']}</div>
-                                    <div class="product-meta">{product['category']} • {product['quantity_on_hand']:g} {product['unit']} in stock</div>
-                                    <div class="product-price">{money(float(product['unit_price']))} / {product['unit']}</div>
-                                </div>
-                                """,
-                                unsafe_allow_html=True,
-                            )
-
+                            deal_html = f'<div class="deal-pill">{product.get("special_deal", "")}</div>' if str(product.get("special_deal", "") or "").strip() else ""
+                            st.markdown(f"""
+                            <div class="product-card">
+                                <div class="product-icon">{icon_for_category(product['category'])}</div>
+                                <div class="product-name">{product['name']}</div>
+                                <div class="product-meta">{product['category']} • {safe_float(product['quantity_on_hand']):g} {product['unit']} in stock</div>
+                                <div class="product-price">{money(product['unit_price'])} / {product['unit']}</div>
+                                {deal_html}
+                            </div>
+                            """, unsafe_allow_html=True)
                             qty_key = f"qty_{category_filter}_{product['id']}"
-                            qty = st.number_input(
-                                "Qty",
-                                min_value=0.0,
-                                max_value=float(product["quantity_on_hand"]),
-                                value=1.0 if float(product["quantity_on_hand"]) >= 1 else 0.0,
-                                step=1.0 if product["unit"] != "gram" else 0.5,
-                                key=qty_key,
-                                label_visibility="collapsed",
-                            )
-
+                            step = 0.5 if str(product.get("unit")) == "gram" or str(product.get("selling_mode")) == "Per Gram" else 1.0
+                            qty = st.number_input("Qty", min_value=0.0, max_value=safe_float(product["quantity_on_hand"]), value=1.0 if safe_float(product["quantity_on_hand"]) >= 1 else 0.0, step=step, key=qty_key, label_visibility="collapsed")
                             b1, b2, b3, b4 = st.columns(4)
                             with b1:
-                                if st.button("+1", key=f"plus1_{category_filter}_{product['id']}", width="stretch"):
+                                if st.button("+1", key=f"plus1_{category_filter}_{product['id']}", use_container_width=True):
                                     add_to_cart(product, 1.0)
                             with b2:
-                                if st.button("+5", key=f"plus5_{category_filter}_{product['id']}", width="stretch"):
+                                if st.button("+5", key=f"plus5_{category_filter}_{product['id']}", use_container_width=True):
                                     add_to_cart(product, 5.0)
                             with b3:
-                                if st.button("+10", key=f"plus10_{category_filter}_{product['id']}", width="stretch"):
+                                if st.button("+10", key=f"plus10_{category_filter}_{product['id']}", use_container_width=True):
                                     add_to_cart(product, 10.0)
                             with b4:
-                                if st.button("Add", key=f"add_{category_filter}_{product['id']}", type="primary", width="stretch"):
+                                if st.button("Add", key=f"add_{category_filter}_{product['id']}", type="primary", use_container_width=True):
                                     add_to_cart(product, qty)
-
     with right:
         st.markdown('<div class="cart-box">', unsafe_allow_html=True)
         st.subheader("Cart")
-
         if not st.session_state.cart:
             st.info("Cart is empty. Add products from the catalog.")
         else:
             for product_id, item in list(st.session_state.cart.items()):
-                line_total = item["quantity"] * item["unit_price"]
+                line_total = line_total_with_deal(item["quantity"], item["unit_price"], item.get("special_deal", ""))
                 c1, c2 = st.columns([3, 1])
                 with c1:
                     st.markdown(f"**{item['name']}**")
-                    st.caption(f"{item['quantity']:g} {item['unit']} × {money(item['unit_price'])}")
+                    deal_note = f" • Deal: {item.get('special_deal')}" if item.get("special_deal") else ""
+                    st.caption(f"{item['quantity']:g} {item['unit']} × {money(item['unit_price'])}{deal_note}")
                 with c2:
                     st.markdown(f"**{money(line_total)}**")
-                    if st.button("Remove", key=f"remove_{product_id}", width="stretch"):
+                    if st.button("Remove", key=f"remove_{product_id}", use_container_width=True):
                         del st.session_state.cart[product_id]
                         st.rerun()
                 st.divider()
-
             st.caption("Grand Total")
             st.markdown(f'<div class="cart-total">{money(cart_total())}</div>', unsafe_allow_html=True)
-
             payment_method = st.selectbox("Payment Method", PAYMENT_METHODS)
-
-            if st.button("Conclude Sale", type="primary", width="stretch"):
+            if st.button("Conclude Sale", type="primary", use_container_width=True):
                 if conclude_sale(inventory, payment_method):
                     st.rerun()
-
         st.markdown("</div>", unsafe_allow_html=True)
-
         if st.session_state.last_receipt:
             st.divider()
             render_receipt(st.session_state.last_receipt)
 
 
-# ============================================================
-# Inventory
-# ============================================================
-
 def page_inventory(inventory: pd.DataFrame) -> None:
-    hero(
-        "Inventory Management",
-        "Edit stock and pricing, add products, make manual adjustments, and monitor low-stock risk.",
-    )
-
+    hero("Inventory Management", "Edit stock, pricing metadata, product details, auto-recalculate pricing drivers, and monitor low-stock risk.")
     valuation = stock_valuation_summary(inventory, load_sales())
-
     if not valuation["has_sales"]:
-        cval1, cval2, cval3 = st.columns(3)
-        with cval1:
-            metric_card("Total Stock Value", money(valuation["current_stock_value"]), "Current value of all stock loaded")
-        with cval2:
-            metric_card("Sales Count", "0", "No sales have been logged yet")
-        with cval3:
-            metric_card("Products Loaded", f"{len(inventory):,}", "Current number of products in inventory")
+        c1, c2, c3 = st.columns(3)
+        with c1: metric_card("Total Stock Value", money(valuation["current_stock_value"]), "Current value of all stock loaded")
+        with c2: metric_card("Sales Count", "0", "No active sales have been logged yet")
+        with c3: metric_card("Products Loaded", f"{len(inventory):,}", "Current number of products")
     else:
-        cval1, cval2, cval3, cval4 = st.columns(4)
-        with cval1:
-            metric_card("Opening Stock Value", money(valuation["opening_stock_value"]), "Loaded stock value before sales")
-        with cval2:
-            metric_card("Total Sales", money(valuation["total_sales_value"]), "All logged sales")
-        with cval3:
-            metric_card("Value Balance", money(valuation["value_balance_less_sales"]), "Opening stock value less logged sales")
-        with cval4:
-            metric_card("Current Stock Value", money(valuation["current_stock_value"]), "Live stock value after sales")
-
+        c1, c2, c3, c4 = st.columns(4)
+        with c1: metric_card("Opening Stock Value", money(valuation["opening_stock_value"]), "Loaded stock value before sales")
+        with c2: metric_card("Total Sales", money(valuation["total_sales_value"]), "All active logged sales")
+        with c3: metric_card("Value Balance", money(valuation["value_balance_less_sales"]), "Opening stock less sales")
+        with c4: metric_card("Current Stock Value", money(valuation["current_stock_value"]), "Live stock value after sales")
     st.divider()
 
     st.subheader("Inventory Table")
     category_filter = st.multiselect("Filter by Category", CATEGORIES, default=CATEGORIES)
     status_filter = st.multiselect("Filter by Status", ["Low", "Medium", "Good"], default=["Low", "Medium", "Good"])
-
-    table_df = inventory[
-        inventory["category"].isin(category_filter)
-        & inventory["status"].isin(status_filter)
-    ].copy()
-
+    table_df = inventory[inventory["category"].isin(category_filter) & inventory["status"].isin(status_filter)].copy()
     display = inventory_display_df(table_df)
 
     def style_status(row):
-        status = row["Status"]
-        if status == "Good":
+        if row["Status"] == "Good":
             return ["background-color: rgba(47, 209, 124, 0.12)"] * len(row)
-        if status == "Medium":
+        if row["Status"] == "Medium":
             return ["background-color: rgba(247, 201, 72, 0.14)"] * len(row)
         return ["background-color: rgba(255, 107, 107, 0.16)"] * len(row)
 
-    st.dataframe(
-        display.style.apply(style_status, axis=1),
-        width="stretch",
-        hide_index=True,
+    st.dataframe(display.style.apply(style_status, axis=1), use_container_width=True, hide_index=True)
+    st.subheader("Inline Editing - Auto Pricing Integrated")
+    st.caption(
+        "Edit stock and product details here. If Unit Cost, Margin, Risk Buffer, or Expected Monthly Units changes, "
+        "the Selling Price is recalculated on save using the full Pricing Engine, including setup-cost recovery. "
+        "Manual price edits are preserved when pricing drivers are unchanged."
     )
-
-    st.subheader("Inline Editing")
-    st.caption("Edit quantity, price, and daily sales estimate. Save changes to persist them.")
-
-    editor_df = inventory[["id", "name", "category", "unit", "quantity_on_hand", "opening_quantity", "unit_price", "daily_sales_estimate"]].copy()
+    editor_cols = ["id", "name", "category", "unit", "selling_mode", "pack_size", "quantity_on_hand", "opening_quantity", "unit_price", "unit_cost", "desired_margin", "risk_buffer", "expected_monthly_units", "special_deal", "daily_sales_estimate"]
     edited_df = st.data_editor(
-        editor_df,
-        width="stretch",
+        inventory[editor_cols].copy(),
+        use_container_width=True,
         hide_index=True,
         disabled=["id"],
         column_config={
-            "name": st.column_config.TextColumn("Product Name", required=True),
             "category": st.column_config.SelectboxColumn("Category", options=CATEGORIES, required=True),
             "unit": st.column_config.SelectboxColumn("Unit", options=UNITS, required=True),
+            "selling_mode": st.column_config.SelectboxColumn("Selling Mode", options=SELLING_MODES, required=True),
             "quantity_on_hand": st.column_config.NumberColumn("Qty on Hand", min_value=0.0, step=0.5),
             "opening_quantity": st.column_config.NumberColumn("Opening Qty", min_value=0.0, step=0.5),
-            "unit_price": st.column_config.NumberColumn("Price (R)", min_value=0.0, step=1.0, format="R %.2f"),
-            "daily_sales_estimate": st.column_config.NumberColumn("Daily Sales Estimate", min_value=0.01, step=0.5),
+            "unit_price": st.column_config.NumberColumn("Selling Price (R) - manual unless pricing drivers change", min_value=0.0, step=1.0, format="R %.2f"),
+            "unit_cost": st.column_config.NumberColumn("Unit Cost (R)", min_value=0.0, step=1.0, format="R %.2f"),
+            "desired_margin": st.column_config.NumberColumn("Margin", min_value=0.0, max_value=0.95, step=0.01, format="%.2f"),
+            "risk_buffer": st.column_config.NumberColumn("Risk Buffer", min_value=0.0, max_value=0.50, step=0.01, format="%.2f"),
+            "expected_monthly_units": st.column_config.NumberColumn("Expected Monthly Units", min_value=1.0, step=1.0),
+            "daily_sales_estimate": st.column_config.NumberColumn("Daily Sales Estimate", min_value=0.0, step=0.5),
         },
     )
-
     if st.button("Save Inventory Changes", type="primary"):
+        config = load_pricing_config()
+        engine = PricingEngine(config)
+        default_rounding = str(config.get("default_rounding", "Round nearest 5"))
         validation_errors = []
+        price_update_log = []
+        original_by_id = inventory.set_index(inventory["id"].astype(str), drop=False)
 
-        for _, row in edited_df.iterrows():
-            if safe_float(row["quantity_on_hand"]) < 0:
-                validation_errors.append(f"{row['name']}: quantity cannot be negative.")
-            if safe_float(row["opening_quantity"]) < 0:
-                validation_errors.append(f"{row['name']}: opening quantity cannot be negative.")
-            if safe_float(row["unit_price"]) < 0:
-                validation_errors.append(f"{row['name']}: price cannot be negative.")
-            if safe_float(row["daily_sales_estimate"]) <= 0:
-                validation_errors.append(f"{row['name']}: daily sales estimate must be above zero.")
+        for idx, row in edited_df.iterrows():
+            product_name = str(row.get("name", "")).strip() or str(row.get("id", "Unknown product"))
+            if not product_name:
+                validation_errors.append("Product name cannot be blank.")
+            if safe_float(row.get("quantity_on_hand")) < 0:
+                validation_errors.append(f"{product_name}: quantity cannot be negative.")
+            if safe_float(row.get("unit_price")) < 0:
+                validation_errors.append(f"{product_name}: price cannot be negative.")
+
+            row_id = str(row.get("id", ""))
+            if row_id in original_by_id.index:
+                original_row = original_by_id.loc[row_id].to_dict()
+                if pricing_inputs_changed(row, original_row):
+                    pricing_error = pricing_input_error(row)
+                    if pricing_error:
+                        validation_errors.append(f"{product_name}: {pricing_error}.")
+                    else:
+                        old_price = safe_float(row.get("unit_price"))
+                        new_price = recalculate_product_price(row, engine, default_rounding)
+                        edited_df.at[idx, "unit_price"] = new_price
+                        price_update_log.append({
+                            "id": row_id,
+                            "name": product_name,
+                            "old_price": old_price,
+                            "new_price": new_price,
+                            "unit_cost": safe_float(row.get("unit_cost")),
+                            "desired_margin": safe_float(row.get("desired_margin")),
+                            "risk_buffer": safe_float(row.get("risk_buffer")),
+                            "expected_monthly_units": safe_float(row.get("expected_monthly_units")),
+                            "rounding": default_rounding,
+                        })
 
         if validation_errors:
-            for error in validation_errors:
-                st.error(error)
+            for err in validation_errors:
+                st.error(err)
         else:
+            before_snapshot = inventory[editor_cols].to_dict(orient="records")
             save_inventory(edited_df)
-            st.toast("Inventory changes saved.", icon="✅")
+            if price_update_log:
+                append_audit(
+                    "INVENTORY_PRICES_AUTO_RECALCULATED",
+                    "N/A",
+                    "Inventory User",
+                    "Inline inventory save recalculated selling prices from pricing drivers",
+                    before=before_snapshot,
+                    after=edited_df[editor_cols].to_dict(orient="records"),
+                    metadata={"updated_count": len(price_update_log), "price_updates": price_update_log},
+                )
+                st.toast(f"Inventory saved. {len(price_update_log)} price(s) auto-recalculated.", icon="✅")
+            else:
+                st.toast("Inventory changes saved.", icon="✅")
             st.rerun()
 
     st.divider()
+    st.subheader("Manual Stock Adjustment")
+    with st.form("stock_adjustment_form", clear_on_submit=True):
+        product_name = st.selectbox("Product", inventory["name"].tolist())
+        adjustment_type = st.radio("Adjustment Type", ["Add Stock", "Subtract Stock"], horizontal=True)
+        adjustment_qty = st.number_input("Quantity", min_value=0.0, value=0.0, step=1.0)
+        reason = st.text_area("Reason", placeholder="Example: supplier delivery, stock count correction, damaged stock")
+        submitted = st.form_submit_button("Apply Adjustment", type="primary")
+        if submitted:
+            if adjustment_qty <= 0:
+                st.error("Adjustment quantity must be greater than zero.")
+            elif not reason.strip():
+                st.error("Please provide a reason for audit visibility.")
+            else:
+                updated = inventory.copy()
+                idx = updated.index[updated["name"] == product_name][0]
+                current_qty = safe_float(updated.loc[idx, "quantity_on_hand"])
+                if adjustment_type == "Subtract Stock" and adjustment_qty > current_qty:
+                    st.error("Cannot subtract more than the quantity on hand.")
+                else:
+                    signed_qty = adjustment_qty if adjustment_type == "Add Stock" else -adjustment_qty
+                    before = {"product": product_name, "quantity_on_hand": current_qty}
+                    updated.loc[idx, "quantity_on_hand"] = current_qty + signed_qty
+                    save_inventory(updated)
+                    append_audit("STOCK_ADJUSTMENT", "N/A", "Inventory User", reason.strip(), before=before, after={"product": product_name, "quantity_on_hand": current_qty + signed_qty}, metadata={"adjustment_type": adjustment_type, "quantity": adjustment_qty})
+                    st.toast(f"Stock adjusted: {product_name}", icon="✅")
+                    st.rerun()
 
-    c1, c2 = st.columns(2, gap="large")
 
-    with c1:
-        st.subheader("Add New Product")
-        with st.form("add_product_form", clear_on_submit=True):
-            name = st.text_input("Product Name", placeholder="Example: Product A")
-            category = st.selectbox("Category", CATEGORIES)
-            unit = st.selectbox("Unit", UNITS)
-            quantity = st.number_input("Opening Quantity", min_value=0.0, value=0.0, step=1.0)
-            price = st.number_input("Unit Price (R)", min_value=0.0, value=0.0, step=1.0)
-            daily_estimate = st.number_input("Daily Sales Estimate", min_value=0.01, value=1.0, step=0.5)
+def page_pricing(inventory: pd.DataFrame) -> None:
+    hero("Pricing Engine", "Central pricing configuration, live price calculation, enhanced product creation, and price updates.")
+    config = load_pricing_config()
+    engine = PricingEngine(config)
 
-            submitted = st.form_submit_button("Add Product", type="primary")
-            if submitted:
+    tabs = st.tabs(["Pricing Config", "Live Calculator", "Add Product", "Edit Product Pricing"])
+    with tabs[0]:
+        st.subheader("Global Pricing Parameters")
+        with st.form("pricing_config_form"):
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                total_upfront = st.number_input("Total Upfront Investment (R)", min_value=0.0, value=safe_float(config["total_upfront_investment"]), step=1000.0)
+                payback_months = st.number_input("Payback Months", min_value=1.0, value=safe_float(config["payback_months"]), step=1.0)
+            with c2:
+                overhead_rate = st.number_input("Overhead Recovery Rate", min_value=0.0, max_value=1.0, value=safe_float(config["overhead_recovery_rate"]), step=0.01, format="%.2f")
+                default_units = st.number_input("Default Expected Monthly Units", min_value=1.0, value=safe_float(config["default_expected_monthly_units"]), step=10.0)
+            with c3:
+                default_margin = st.number_input("Default Margin", min_value=0.0, max_value=0.95, value=safe_float(config["default_margin"]), step=0.01, format="%.2f")
+                default_risk = st.number_input("Default Risk Buffer", min_value=0.0, max_value=0.50, value=safe_float(config["default_risk_buffer"]), step=0.01, format="%.2f")
+                default_rounding = st.selectbox("Default Rounding", ROUNDING_OPTIONS, index=ROUNDING_OPTIONS.index(config.get("default_rounding", "Round nearest 5")) if config.get("default_rounding") in ROUNDING_OPTIONS else 0)
+            if st.form_submit_button("Save Pricing Configuration", type="primary"):
+                save_pricing_config({
+                    "total_upfront_investment": total_upfront,
+                    "payback_months": payback_months,
+                    "overhead_recovery_rate": overhead_rate,
+                    "default_risk_buffer": default_risk,
+                    "default_margin": default_margin,
+                    "default_expected_monthly_units": default_units,
+                    "default_rounding": default_rounding,
+                })
+                st.toast("Pricing configuration saved.", icon="✅")
+                st.rerun()
+        calc = engine.calculate(unit_cost=0, expected_monthly_units=engine.default_expected_monthly_units)
+        st.info(f"Current fixed cost buffer per unit using default volume: {money(calc['fixed_cost_buffer'])}")
+
+    with tabs[1]:
+        st.subheader("Live Suggested Price Calculator")
+        c1, c2, c3, c4 = st.columns(4)
+        with c1: unit_cost = st.number_input("Unit Cost (R)", min_value=0.0, value=40.0, step=1.0, key="calc_cost")
+        with c2: margin = st.number_input("Desired Margin", min_value=0.0, max_value=0.95, value=safe_float(config["default_margin"]), step=0.01, format="%.2f", key="calc_margin")
+        with c3: risk = st.number_input("Risk Buffer", min_value=0.0, max_value=0.50, value=safe_float(config["default_risk_buffer"]), step=0.01, format="%.2f", key="calc_risk")
+        with c4: expected_units = st.number_input("Expected Monthly Units", min_value=1.0, value=safe_float(config["default_expected_monthly_units"]), step=1.0, key="calc_units")
+        rounding = st.selectbox("Rounding Preference", ROUNDING_OPTIONS, key="calc_rounding")
+        result = engine.calculate(unit_cost, margin, risk, expected_units, rounding)
+        m1, m2, m3, m4 = st.columns(4)
+        with m1: metric_card("Fixed Cost Buffer", money(result["fixed_cost_buffer"]), "Recovered per unit")
+        with m2: metric_card("Loaded Unit Cost", money(result["loaded_unit_cost"]), "Cost + buffer")
+        with m3: metric_card("Suggested Price", money(result["suggested_selling_price"]), "Before rounding")
+        with m4: metric_card("Final Rounded Price", money(result["rounded_selling_price"]), rounding)
+
+    with tabs[2]:
+        st.subheader("Add New Product with Auto-Pricing")
+        with st.form("enhanced_add_product_form", clear_on_submit=True):
+            c1, c2 = st.columns(2)
+            with c1:
+                name = st.text_input("Product Name")
+                category = st.selectbox("Category", CATEGORIES)
+                unit = st.selectbox("Unit", UNITS)
+                selling_mode = st.selectbox("Selling Mode", SELLING_MODES)
+                pack_size = st.number_input("Pack Size / Weight", min_value=1.0, value=1.0, step=1.0)
+                opening_qty = st.number_input("Opening Quantity", min_value=0.0, value=0.0, step=1.0)
+            with c2:
+                unit_cost = st.number_input("Unit Cost (R)", min_value=0.0, value=40.0, step=1.0)
+                margin = st.number_input("Desired Margin", min_value=0.0, max_value=0.95, value=safe_float(config["default_margin"]), step=0.01, format="%.2f")
+                risk = st.number_input("Risk Buffer", min_value=0.0, max_value=0.50, value=safe_float(config["default_risk_buffer"]), step=0.01, format="%.2f")
+                expected_units = st.number_input("Expected Monthly Units", min_value=1.0, value=safe_float(config["default_expected_monthly_units"]), step=1.0)
+                rounding = st.selectbox("Rounding", ROUNDING_OPTIONS, index=ROUNDING_OPTIONS.index(config.get("default_rounding", "Round nearest 5")) if config.get("default_rounding") in ROUNDING_OPTIONS else 0)
+                override_price = st.number_input("Override Final Price (optional, 0 = use calculated)", min_value=0.0, value=0.0, step=1.0)
+                special_deal = st.text_input("Special Deal (optional)", placeholder="Example: 3 for R100")
+            result = engine.calculate(unit_cost, margin, risk, expected_units, rounding)
+            product_pricing_row = {
+                "unit_cost": unit_cost,
+                "desired_margin": margin,
+                "risk_buffer": risk,
+                "expected_monthly_units": expected_units,
+            }
+            final_price = override_price if override_price > 0 else recalculate_product_price(product_pricing_row, engine, rounding)
+            st.markdown(f"**Suggested:** {money(result['suggested_selling_price'])} | **Final:** {money(final_price)} | **Buffer:** {money(result['fixed_cost_buffer'])}")
+            if st.form_submit_button("Add Product", type="primary"):
                 if not name.strip():
                     st.error("Product name is required.")
                 elif name.strip().lower() in inventory["name"].str.lower().tolist():
                     st.error("A product with this name already exists.")
                 else:
+                    prefix = re.sub(r"[^A-Z]", "", category.upper())[:3] or "PRD"
                     new_row = {
-                        "id": make_id(category[:2].upper()),
-                        "name": name.strip(),
-                        "category": category,
-                        "unit": unit,
-                        "quantity_on_hand": float(quantity),
-                        "opening_quantity": float(quantity),
-                        "unit_price": float(price),
-                        "daily_sales_estimate": float(daily_estimate),
+                        "id": make_id(prefix), "name": name.strip(), "category": category, "unit": unit, "selling_mode": selling_mode, "pack_size": pack_size,
+                        "quantity_on_hand": opening_qty, "opening_quantity": opening_qty, "unit_price": final_price, "unit_cost": unit_cost,
+                        "desired_margin": margin, "risk_buffer": risk, "expected_monthly_units": expected_units, "special_deal": special_deal.strip(),
+                        "daily_sales_estimate": max(expected_units / 30, 1.0),
                     }
                     updated = pd.concat([inventory, pd.DataFrame([new_row])], ignore_index=True)
                     save_inventory(updated)
+                    append_audit("PRODUCT_ADDED", "N/A", "Pricing User", "Product added through Pricing Engine", before=None, after=new_row)
                     st.toast("Product added successfully.", icon="✅")
                     st.rerun()
 
-    with c2:
-        st.subheader("Manual Stock Adjustment")
-        with st.form("stock_adjustment_form", clear_on_submit=True):
-            product_name = st.selectbox("Product", inventory["name"].tolist())
-            adjustment_type = st.radio("Adjustment Type", ["Add Stock", "Subtract Stock"], horizontal=True)
-            adjustment_qty = st.number_input("Quantity", min_value=0.0, value=0.0, step=1.0)
-            reason = st.text_area("Reason", placeholder="Example: supplier delivery, stock count correction, damaged stock")
-
-            submitted = st.form_submit_button("Apply Adjustment", type="primary")
-            if submitted:
-                if adjustment_qty <= 0:
-                    st.error("Adjustment quantity must be greater than zero.")
-                elif not reason.strip():
-                    st.error("Please provide a reason for audit visibility.")
-                else:
+    with tabs[3]:
+        st.subheader("Edit Existing Product Pricing")
+        if inventory.empty:
+            st.info("No products available.")
+        else:
+            product_name = st.selectbox("Select Product", inventory["name"].tolist())
+            row = inventory[inventory["name"] == product_name].iloc[0]
+            with st.form("edit_product_pricing_form"):
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    unit_cost = st.number_input("Unit Cost (R)", min_value=0.0, value=safe_float(row["unit_cost"]), step=1.0)
+                    margin = st.number_input("Desired Margin", min_value=0.0, max_value=0.95, value=safe_float(row["desired_margin"]), step=0.01, format="%.2f")
+                with c2:
+                    risk = st.number_input("Risk Buffer", min_value=0.0, max_value=0.50, value=safe_float(row["risk_buffer"]), step=0.01, format="%.2f")
+                    expected_units = st.number_input("Expected Monthly Units", min_value=1.0, value=max(safe_float(row["expected_monthly_units"]), 1.0), step=1.0)
+                with c3:
+                    rounding = st.selectbox("Rounding", ROUNDING_OPTIONS, index=ROUNDING_OPTIONS.index(config.get("default_rounding", "Round nearest 5")) if config.get("default_rounding") in ROUNDING_OPTIONS else 0)
+                    override = st.number_input("Manual Override Price (0 = use calculated)", min_value=0.0, value=0.0, step=1.0)
+                    special_deal = st.text_input("Special Deal", value=str(row.get("special_deal", "") or ""))
+                result = engine.calculate(unit_cost, margin, risk, expected_units, rounding)
+                product_pricing_row = {
+                    "unit_cost": unit_cost,
+                    "desired_margin": margin,
+                    "risk_buffer": risk,
+                    "expected_monthly_units": expected_units,
+                }
+                new_price = override if override > 0 else recalculate_product_price(product_pricing_row, engine, rounding)
+                st.markdown(f"**New calculated price:** {money(result['suggested_selling_price'])} | **New final price:** {money(new_price)}")
+                if st.form_submit_button("Update Product Pricing", type="primary"):
                     updated = inventory.copy()
-                    idx = updated.index[updated["name"] == product_name][0]
-                    current_qty = float(updated.loc[idx, "quantity_on_hand"])
+                    idx = updated.index[updated["id"] == row["id"]][0]
+                    before = updated.loc[idx].to_dict()
+                    updated.loc[idx, "unit_cost"] = unit_cost
+                    updated.loc[idx, "desired_margin"] = margin
+                    updated.loc[idx, "risk_buffer"] = risk
+                    updated.loc[idx, "expected_monthly_units"] = expected_units
+                    updated.loc[idx, "unit_price"] = new_price
+                    updated.loc[idx, "special_deal"] = special_deal.strip()
+                    save_inventory(updated)
+                    append_audit("PRODUCT_PRICE_UPDATED", "N/A", "Pricing User", "Product pricing updated", before=before, after=updated.loc[idx].to_dict())
+                    st.toast("Product pricing updated.", icon="✅")
+                    st.rerun()
 
-                    if adjustment_type == "Subtract Stock" and adjustment_qty > current_qty:
-                        st.error("Cannot subtract more than the quantity on hand.")
-                    else:
-                        signed_qty = adjustment_qty if adjustment_type == "Add Stock" else -adjustment_qty
-                        updated.loc[idx, "quantity_on_hand"] = current_qty + signed_qty
-                        save_inventory(updated)
-                        st.toast(f"Stock adjusted: {product_name}", icon="✅")
-                        st.rerun()
-
-
-# ============================================================
-# Sales Reports
-# ============================================================
 
 def page_sales_reports(sales: List[Dict[str, Any]]) -> None:
-    hero(
-        "Sales History & Reports",
-        "Review every sale, export transaction history, and see product/day level performance.",
-    )
+    hero("Sales History & Reports", "Review sales, edit/void within monthly window, export backups, and inspect audit trail.")
+    tabs = st.tabs(["Sales History", "Edit / Void Sales", "Voids & Edits Log", "Audit Trail", "Backups"])
 
-    sales_df = sales_to_dataframe(sales)
-    items_df = sale_items_to_dataframe(sales)
+    with tabs[0]:
+        sales_df = sales_to_dataframe(sales, include_voided=True)
+        if sales_df.empty:
+            st.info("No sales logged yet.")
+        else:
+            sales_df["Timestamp Parsed"] = pd.to_datetime(sales_df["Timestamp"], errors="coerce")
+            sales_df["Date"] = sales_df["Timestamp Parsed"].dt.date
+            c1, c2, c3 = st.columns(3)
+            active_total = sales_df.loc[sales_df["Status"] != "voided", "Total (R)"].sum()
+            with c1: metric_card("Active Sales", money(active_total), "Excludes voided sales")
+            with c2: metric_card("Transactions", f"{len(sales_df):,}", "Includes voided records")
+            with c3: metric_card("Voided", f"{(sales_df['Status'] == 'voided').sum():,}", "Voided transactions retained")
+            start_date = st.date_input("Start Date", value=min(sales_df["Date"]), key="sales_start")
+            end_date = st.date_input("End Date", value=max(sales_df["Date"]), key="sales_end")
+            filtered = sales_df[(sales_df["Date"] >= start_date) & (sales_df["Date"] <= end_date)].copy()
+            st.dataframe(filtered[["Sale ID", "Timestamp", "Status", "Payment Method", "Items", "Total (R)", "Modified Count"]], use_container_width=True, hide_index=True)
+            st.download_button("Export Sales History to CSV", data=filtered.to_csv(index=False).encode("utf-8"), file_name=f"saint_herb_sales_history_{today_string()}.csv", mime="text/csv", use_container_width=True)
 
-    if sales_df.empty:
-        st.info("No sales logged yet.")
+    with tabs[1]:
+        active_sales = [s for s in sales if normalise_sale(s).get("status") != "voided"]
+        if not active_sales:
+            st.info("No active sales available to edit or void.")
+        else:
+            labels = [f"{s['sale_id']} | {s.get('timestamp')} | {money(safe_float(s.get('total')))}" for s in active_sales]
+            selected_label = st.selectbox("Select Sale", labels)
+            selected_sale = active_sales[labels.index(selected_label)]
+            allowed, msg = can_modify_sale(selected_sale)
+            st.info(msg if allowed else f"Blocked: {msg}")
+            st.dataframe(pd.DataFrame(selected_sale.get("items", [])), use_container_width=True, hide_index=True)
+            bartender = st.text_input("Bartender Full Name")
+            reason = st.text_area("Mandatory Reason")
+            c1, c2 = st.columns(2)
+            with c1:
+                st.subheader("Void Sale")
+                st.caption("Voiding restores the sold quantities back into inventory and keeps the record as voided.")
+                if st.button("Void Selected Sale", type="primary", disabled=not allowed, use_container_width=True):
+                    ok, out = void_sale(selected_sale["sale_id"], bartender, reason)
+                    if ok:
+                        st.success(out)
+                        st.rerun()
+                    else:
+                        st.error(out)
+            with c2:
+                st.subheader("Edit Sale Items")
+                st.caption("Change quantities only. Use 0 to remove an item from the sale.")
+                inventory = load_inventory()
+                current_items = pd.DataFrame(selected_sale.get("items", []))
+                if current_items.empty:
+                    st.info("This sale has no items.")
+                else:
+                    edit_df = current_items[["product_id", "name", "quantity", "unit_price", "special_deal"]].copy() if "special_deal" in current_items.columns else current_items[["product_id", "name", "quantity", "unit_price"]].copy()
+                    if "special_deal" not in edit_df.columns:
+                        edit_df["special_deal"] = ""
+                    edited = st.data_editor(edit_df, use_container_width=True, hide_index=True, disabled=["product_id", "name", "unit_price", "special_deal"], column_config={"quantity": st.column_config.NumberColumn("Quantity", min_value=0.0, step=0.5)})
+                    new_payment = st.selectbox("Payment Method", PAYMENT_METHODS, index=PAYMENT_METHODS.index(selected_sale.get("payment_method", "Other")) if selected_sale.get("payment_method") in PAYMENT_METHODS else 0)
+                    if st.button("Save Edited Sale", type="primary", disabled=not allowed, use_container_width=True):
+                        edited_items = []
+                        for _, item in edited.iterrows():
+                            qty = safe_float(item["quantity"])
+                            if qty <= 0:
+                                continue
+                            unit_price = safe_float(item["unit_price"])
+                            deal = str(item.get("special_deal", "") or "")
+                            edited_items.append({
+                                "product_id": str(item["product_id"]),
+                                "name": str(item["name"]),
+                                "quantity": qty,
+                                "unit_price": unit_price,
+                                "line_total": line_total_with_deal(qty, unit_price, deal),
+                                "special_deal": deal,
+                            })
+                        if not edited_items:
+                            st.error("Edited sale must contain at least one item. Use void if the whole sale must be cancelled.")
+                        else:
+                            ok, out = edit_sale(selected_sale["sale_id"], edited_items, new_payment, bartender, reason)
+                            if ok:
+                                st.success(out)
+                                st.rerun()
+                            else:
+                                st.error(out)
+
+    with tabs[2]:
+        rows = []
+        for sale in sales:
+            for event in normalise_sale(sale).get("modification_history", []):
+                rows.append({
+                    "Sale ID": sale.get("sale_id"),
+                    "Sale Status": sale.get("status"),
+                    "Action": event.get("action"),
+                    "Timestamp": event.get("timestamp"),
+                    "Bartender": event.get("bartender"),
+                    "Reason": event.get("reason"),
+                })
+        if rows:
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        else:
+            st.info("No voids or edits have been logged yet.")
+
+    with tabs[3]:
+        audit = load_audit()
+        if audit:
+            audit_df = pd.DataFrame(audit)
+            display_cols = [c for c in ["audit_id", "timestamp", "action", "sale_id", "bartender", "reason"] if c in audit_df.columns]
+            st.dataframe(audit_df[display_cols], use_container_width=True, hide_index=True)
+            st.download_button("Export Audit Trail CSV", data=audit_df.to_csv(index=False).encode("utf-8"), file_name=f"saint_herb_audit_{today_string()}.csv", mime="text/csv", use_container_width=True)
+        else:
+            st.info("No audit records yet.")
+
+    with tabs[4]:
         inventory = load_inventory()
-        backup = build_backup_zip(inventory, sales, only_today=True)
-        st.download_button(
-            "Save Today's Data Backup",
-            data=backup,
-            file_name=f"saint_herb_today_backup_{today_string()}.zip",
-            mime="application/zip",
-            width="stretch",
-        )
-        return
+        today_backup = build_backup_zip(inventory, sales, only_today=True)
+        full_backup = build_backup_zip(inventory, sales, only_today=False)
+        c1, c2 = st.columns(2)
+        with c1:
+            st.download_button("Save Today's Data Backup", data=today_backup, file_name=f"saint_herb_today_backup_{today_string()}.zip", mime="application/zip", use_container_width=True)
+        with c2:
+            st.download_button("Save Full Backup Pack", data=full_backup, file_name=f"saint_herb_full_backup_{today_string()}.zip", mime="application/zip", use_container_width=True)
 
-    sales_df["Timestamp Parsed"] = pd.to_datetime(sales_df["Timestamp"], errors="coerce")
-    sales_df["Date"] = sales_df["Timestamp Parsed"].dt.date
-
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        metric_card("Total Sales", money(sales_df["Total (R)"].sum()), "All logged transactions")
-    with c2:
-        metric_card("Number of Sales", f"{len(sales_df):,}", "Transaction count")
-    with c3:
-        avg_sale = sales_df["Total (R)"].mean()
-        metric_card("Average Basket", money(avg_sale), "Average sale value")
-
-    st.divider()
-
-    start_date = st.date_input("Start Date", value=min(sales_df["Date"]))
-    end_date = st.date_input("End Date", value=max(sales_df["Date"]))
-
-    filtered_sales = sales_df[(sales_df["Date"] >= start_date) & (sales_df["Date"] <= end_date)].copy()
-
-    st.subheader("Sales History")
-    st.dataframe(
-        filtered_sales[["Sale ID", "Timestamp", "Payment Method", "Items", "Total (R)"]],
-        width="stretch",
-        hide_index=True,
-    )
-
-    csv = filtered_sales[["Sale ID", "Timestamp", "Payment Method", "Items", "Total (R)"]].to_csv(index=False).encode("utf-8")
-    st.download_button(
-        "Export Sales History to CSV",
-        data=csv,
-        file_name=f"saint_herb_sales_history_{today_string()}.csv",
-        mime="text/csv",
-        width="stretch",
-    )
-
-    full_backup = build_backup_zip(load_inventory(), sales, only_today=False)
-    today_backup = build_backup_zip(load_inventory(), sales, only_today=True)
-    bcol1, bcol2 = st.columns(2)
-    with bcol1:
-        st.download_button(
-            "Save Today's Data Backup",
-            data=today_backup,
-            file_name=f"saint_herb_today_backup_{today_string()}.zip",
-            mime="application/zip",
-            width="stretch",
-        )
-    with bcol2:
-        st.download_button(
-            "Save Full Backup Pack",
-            data=full_backup,
-            file_name=f"saint_herb_full_backup_{today_string()}.zip",
-            mime="application/zip",
-            width="stretch",
-        )
-
-    st.divider()
-
-    c1, c2 = st.columns(2, gap="large")
-    with c1:
-        st.subheader("Sales by Day")
-        by_day = filtered_sales.groupby("Date", as_index=False)["Total (R)"].sum()
-        fig = px.line(by_day, x="Date", y="Total (R)", markers=True, height=420)
-        fig.update_layout(margin=dict(l=10, r=10, t=30, b=10))
-        st.plotly_chart(fig, width="stretch")
-
-    with c2:
-        st.subheader("Payment Mix")
-        payment_mix = filtered_sales.groupby("Payment Method", as_index=False)["Total (R)"].sum()
-        fig = px.pie(payment_mix, names="Payment Method", values="Total (R)", hole=0.55, height=420)
-        fig.update_layout(margin=dict(l=10, r=10, t=30, b=10))
-        st.plotly_chart(fig, width="stretch")
-
-    st.subheader("Sales by Product")
-    if items_df.empty:
-        st.info("No item-level data available.")
-    else:
-        items_df["date_parsed"] = pd.to_datetime(items_df["date"], errors="coerce").dt.date
-        filtered_items = items_df[(items_df["date_parsed"] >= start_date) & (items_df["date_parsed"] <= end_date)]
-        by_product = (
-            filtered_items.groupby("name", as_index=False)
-            .agg(quantity_sold=("quantity", "sum"), sales=("line_total", "sum"))
-            .sort_values("sales", ascending=False)
-        )
-
-        st.dataframe(
-            by_product.rename(
-                columns={
-                    "name": "Product",
-                    "quantity_sold": "Quantity Sold",
-                    "sales": "Sales (R)",
-                }
-            ),
-            width="stretch",
-            hide_index=True,
-        )
-
-        fig = px.bar(
-            by_product.head(12),
-            x="sales",
-            y="name",
-            orientation="h",
-            text_auto=".2s",
-            height=480,
-            labels={"sales": "Sales (R)", "name": "Product"},
-        )
-        fig.update_layout(yaxis={"categoryorder": "total ascending"}, margin=dict(l=10, r=10, t=30, b=10))
-        st.plotly_chart(fig, width="stretch")
-
-
-# ============================================================
-# Settings
-# ============================================================
 
 def page_settings() -> None:
-    hero(
-        "Settings",
-        "Manage lightweight storage files, daily backups, and notes for the upcoming database upgrade.",
-    )
-
+    hero("Settings", "Manage lightweight storage files, daily backups, and notes for the upcoming database upgrade.")
     inventory = load_inventory()
     sales = load_sales()
-
     st.subheader("Data Files")
     st.write(f"Inventory file: `{INVENTORY_FILE.resolve()}`")
     st.write(f"Sales file: `{SALES_FILE.resolve()}`")
-
-    st.info("The reset demo data button has been removed for live trading safety.")
-
+    st.write(f"Audit file: `{AUDIT_FILE.resolve()}`")
+    st.write(f"Pricing config file: `{PRICING_CONFIG_FILE.resolve()}`")
+    st.info("There is no reset-demo button in this live-lite build.")
     st.subheader("Daily Backup")
-    st.caption("Use this at end-of-day while the app is still on lightweight local JSON storage.")
-
-    today_backup = build_backup_zip(inventory, sales, only_today=True)
-    full_backup = build_backup_zip(inventory, sales, only_today=False)
-
     c1, c2 = st.columns(2)
     with c1:
-        st.download_button(
-            "Save Today's Data Backup",
-            data=today_backup,
-            file_name=f"saint_herb_today_backup_{today_string()}.zip",
-            mime="application/zip",
-            width="stretch",
-        )
+        st.download_button("Save Today's Data Backup", data=build_backup_zip(inventory, sales, only_today=True), file_name=f"saint_herb_today_backup_{today_string()}.zip", mime="application/zip", use_container_width=True)
     with c2:
-        st.download_button(
-            "Save Full Backup Pack",
-            data=full_backup,
-            file_name=f"saint_herb_full_backup_{today_string()}.zip",
-            mime="application/zip",
-            width="stretch",
-        )
-
+        st.download_button("Save Full Backup Pack", data=build_backup_zip(inventory, sales, only_today=False), file_name=f"saint_herb_full_backup_{today_string()}.zip", mime="application/zip", use_container_width=True)
     st.divider()
-
     st.subheader("Production Notes")
-    st.markdown(
-        """
-        For the next upgrade, move storage from local JSON files to a proper database:
-        - Supabase or PostgreSQL for persistent sales and inventory records.
-        - User login and cashier permissions.
-        - Audit logs for every inventory adjustment.
-        - End-of-day reports by cashier/payment type.
-        - Barcode scanning and supplier receiving workflow.
-        """
-    )
+    st.markdown("""
+    Next upgrade recommendation:
+    - Move from local JSON to Supabase/PostgreSQL.
+    - Add login and cashier roles.
+    - Store every receipt, edit, void, stock movement and price change in relational tables.
+    - Add end-of-day closeout by cashier and payment method.
+    """)
 
 
 # ============================================================
 # Main App
 # ============================================================
 
+def init_state() -> None:
+    if "cart" not in st.session_state:
+        st.session_state.cart = {}
+    if "last_receipt" not in st.session_state:
+        st.session_state.last_receipt = None
+
+
 def main() -> None:
     inject_css()
     init_state()
-
     inventory = load_inventory()
     sales = load_sales()
-
     with st.sidebar:
         st.markdown("## 🌿 Saint Herb")
         st.caption("Premium Inventory + POS")
         st.divider()
-
-        page = st.radio(
-            "Navigation",
-            ["Dashboard", "Point of Sale", "Inventory", "Sales Reports", "Settings"],
-            label_visibility="collapsed",
-        )
-
+        page = st.radio("Navigation", ["Dashboard", "Point of Sale", "Inventory", "Pricing", "Sales Reports", "Settings"], label_visibility="collapsed")
         st.divider()
         st.caption("Current Session")
         st.write(f"Cart items: **{len(st.session_state.cart)}**")
         st.write(f"Cart total: **{money(cart_total())}**")
-
         st.divider()
-        st.caption("Go-live lite build. Save a backup at the end of each trading day.")
-
+        st.caption("Live-lite build. Save backups daily until database upgrade is complete.")
     if page == "Dashboard":
         page_dashboard(inventory, sales)
     elif page == "Point of Sale":
         page_pos(inventory)
     elif page == "Inventory":
         page_inventory(inventory)
+    elif page == "Pricing":
+        page_pricing(inventory)
     elif page == "Sales Reports":
         page_sales_reports(sales)
     elif page == "Settings":
