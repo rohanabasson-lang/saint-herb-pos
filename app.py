@@ -1504,44 +1504,196 @@ def page_pricing(inventory: pd.DataFrame) -> None:
         if inventory.empty:
             st.info("No products available.")
         else:
-            product_name = st.selectbox("Select Product", inventory["name"].tolist())
-            row = inventory[inventory["name"] == product_name].iloc[0]
-            with st.form("edit_product_pricing_form"):
-                c1, c2, c3 = st.columns(3)
-                with c1:
-                    unit_cost = st.number_input("Unit Cost (R)", min_value=0.0, value=safe_float(row["unit_cost"]), step=1.0)
-                    margin = st.number_input("Desired Margin", min_value=0.0, max_value=0.95, value=safe_float(row["desired_margin"]), step=0.01, format="%.2f")
-                with c2:
-                    risk = st.number_input("Risk Buffer", min_value=0.0, max_value=0.50, value=safe_float(row["risk_buffer"]), step=0.01, format="%.2f")
-                    expected_units = st.number_input("Expected Monthly Units", min_value=1.0, value=max(safe_float(row["expected_monthly_units"]), 1.0), step=1.0)
-                with c3:
-                    rounding = st.selectbox("Rounding", ROUNDING_OPTIONS, index=ROUNDING_OPTIONS.index(config.get("default_rounding", "Round nearest 5")) if config.get("default_rounding") in ROUNDING_OPTIONS else 0)
-                    override = st.number_input("Manual Override Price (0 = use calculated)", min_value=0.0, value=0.0, step=1.0)
-                    special_deal = st.text_input("Special Deal", value=str(row.get("special_deal", "") or ""))
-                result = engine.calculate(unit_cost, margin, risk, expected_units, rounding)
-                product_pricing_row = {
-                    "unit_cost": unit_cost,
-                    "desired_margin": margin,
-                    "risk_buffer": risk,
-                    "expected_monthly_units": expected_units,
-                }
-                new_price = override if override > 0 else recalculate_product_price(product_pricing_row, engine, rounding)
-                st.markdown(f"**New calculated price:** {money(result['suggested_selling_price'])} | **New final price:** {money(new_price)}")
-                if st.form_submit_button("Update Product Pricing", type="primary"):
-                    updated = inventory.copy()
-                    idx = updated.index[updated["id"] == row["id"]][0]
-                    before = updated.loc[idx].to_dict()
-                    updated.loc[idx, "unit_cost"] = unit_cost
-                    updated.loc[idx, "desired_margin"] = margin
-                    updated.loc[idx, "risk_buffer"] = risk
-                    updated.loc[idx, "expected_monthly_units"] = expected_units
-                    updated.loc[idx, "unit_price"] = new_price
-                    updated.loc[idx, "special_deal"] = special_deal.strip()
-                    save_inventory(updated)
-                    append_audit("PRODUCT_PRICE_UPDATED", "N/A", "Pricing User", "Product pricing updated", before=before, after=updated.loc[idx].to_dict())
-                    st.toast("Product pricing updated.", icon="✅")
-                    st.rerun()
+            inventory_for_select = inventory.copy()
+            inventory_for_select["id"] = inventory_for_select["id"].astype(str)
+            product_ids = inventory_for_select["id"].tolist()
+            product_lookup = inventory_for_select.set_index("id").to_dict(orient="index")
 
+            selected_product_id = st.selectbox(
+                "Select Product",
+                product_ids,
+                format_func=lambda pid: str(product_lookup.get(str(pid), {}).get("name", str(pid))),
+                key="edit_pricing_selected_product_id",
+            )
+            row = inventory_for_select[inventory_for_select["id"] == str(selected_product_id)].iloc[0]
+
+            current_name = str(row.get("name", "")).strip()
+            current_price = safe_float(row.get("unit_price"))
+            current_margin = safe_float(row.get("desired_margin"), safe_float(config.get("default_margin"), 0.40))
+            current_risk = safe_float(row.get("risk_buffer"), safe_float(config.get("default_risk_buffer"), 0.05))
+            stored_unit_cost = safe_float(row.get("unit_cost"))
+            stored_expected_units = max(safe_float(row.get("expected_monthly_units"), engine.default_expected_monthly_units), 1.0)
+            default_rounding_value = str(config.get("default_rounding", "Round nearest 5"))
+            default_rounding_index = ROUNDING_OPTIONS.index(default_rounding_value) if default_rounding_value in ROUNDING_OPTIONS else 0
+
+            # Many of the neutral placeholder rows start with unit_cost = 0 but already have a POS price.
+            # For repricing, infer a starting unit cost from the current POS price and current margin/risk.
+            # Using the global default volume keeps this aligned to the Live Calculator assumptions.
+            should_infer_cost = stored_unit_cost <= 0 and current_price > 0
+            default_expected_units_for_edit = engine.default_expected_monthly_units if should_infer_cost else stored_expected_units
+            denominator = 1 - current_margin - current_risk
+            inferred_unit_cost = 0.0
+            if should_infer_cost and denominator > 0:
+                inferred_unit_cost = max((current_price * denominator) - engine.fixed_cost_buffer(default_expected_units_for_edit), 0.0)
+            default_unit_cost_for_edit = stored_unit_cost if stored_unit_cost > 0 else round(inferred_unit_cost, 2)
+
+            st.markdown("#### Current POS Pricing")
+            p1, p2, p3, p4 = st.columns(4)
+            with p1: metric_card("Current Product", current_name or str(selected_product_id), str(selected_product_id))
+            with p2: metric_card("Current POS Price", money(current_price), "Price currently visible in POS")
+            with p3: metric_card("Current Margin", f"{current_margin * 100:.0f}%", "Stored pricing driver")
+            with p4: metric_card("Current Risk Buffer", f"{current_risk * 100:.0f}%", "Stored pricing driver")
+
+            if should_infer_cost and default_unit_cost_for_edit > 0:
+                st.info(
+                    f"Unit cost was blank/zero for this product, so the screen inferred {money(default_unit_cost_for_edit)} "
+                    f"from the current POS price of {money(current_price)} using the current margin, risk buffer, and global expected monthly units. "
+                    "You can overwrite it before saving."
+                )
+
+            st.markdown("#### Rename Product")
+            new_name = st.text_input(
+                "Product Name",
+                value=current_name,
+                key=f"edit_product_name_{selected_product_id}",
+                help="This replaces the old Product 001-style name in inventory and in the POS catalog.",
+            )
+
+            st.markdown("#### Product Pricing Calculator")
+            c1, c2, c3, c4 = st.columns(4)
+            with c1:
+                unit_cost = st.number_input(
+                    "Unit Cost (R)",
+                    min_value=0.0,
+                    value=float(default_unit_cost_for_edit),
+                    step=1.0,
+                    key=f"edit_unit_cost_{selected_product_id}",
+                )
+            with c2:
+                margin = st.number_input(
+                    "Desired Margin",
+                    min_value=0.0,
+                    max_value=0.95,
+                    value=float(current_margin),
+                    step=0.01,
+                    format="%.2f",
+                    key=f"edit_margin_{selected_product_id}",
+                )
+            with c3:
+                risk = st.number_input(
+                    "Risk Buffer",
+                    min_value=0.0,
+                    max_value=0.50,
+                    value=float(current_risk),
+                    step=0.01,
+                    format="%.2f",
+                    key=f"edit_risk_{selected_product_id}",
+                )
+            with c4:
+                expected_units = st.number_input(
+                    "Expected Monthly Units",
+                    min_value=1.0,
+                    value=float(default_expected_units_for_edit),
+                    step=1.0,
+                    key=f"edit_expected_units_{selected_product_id}",
+                )
+
+            rounding = st.selectbox(
+                "Rounding Preference",
+                ROUNDING_OPTIONS,
+                index=default_rounding_index,
+                key=f"edit_rounding_{selected_product_id}",
+            )
+            c5, c6 = st.columns(2)
+            with c5:
+                override = st.number_input(
+                    "Manual Override Price (0 = use calculated)",
+                    min_value=0.0,
+                    value=0.0,
+                    step=1.0,
+                    key=f"edit_override_{selected_product_id}",
+                )
+            with c6:
+                special_deal = st.text_input(
+                    "Special Deal",
+                    value=str(row.get("special_deal", "") or ""),
+                    key=f"edit_special_deal_{selected_product_id}",
+                    placeholder="Example: 3 for R100",
+                )
+
+            preview_row = {
+                "unit_cost": unit_cost,
+                "desired_margin": margin,
+                "risk_buffer": risk,
+                "expected_monthly_units": expected_units,
+            }
+            result = engine.calculate(unit_cost, margin, risk, expected_units, rounding)
+            calculated_price = safe_float(result["suggested_selling_price"])
+            rounded_price = recalculate_product_price(preview_row, engine, rounding)
+            new_price = override if override > 0 else rounded_price
+
+            pricing_error = pricing_input_error(preview_row)
+            if pricing_error:
+                st.error(f"Pricing check: {pricing_error}.")
+
+            st.markdown("#### New Price Preview")
+            m1, m2, m3, m4 = st.columns(4)
+            with m1: metric_card("Fixed Cost Buffer", money(result["fixed_cost_buffer"]), "Recovered per unit")
+            with m2: metric_card("Loaded Unit Cost", money(result["loaded_unit_cost"]), "Cost + buffer")
+            with m3: metric_card("New Calculated Price", money(calculated_price), "Before rounding")
+            with m4: metric_card("New Final Price", money(new_price), "Manual override used" if override > 0 else rounding)
+
+            st.markdown(f"### New calculated price: {money(calculated_price)} | New final price: {money(new_price)}")
+            st.caption("Once updated, the POS catalog will use the new product name and new final price immediately.")
+
+            update_clicked = st.button("Update Product Pricing", type="primary", key=f"update_product_pricing_{selected_product_id}")
+            if update_clicked:
+                clean_name = new_name.strip()
+                other_names = inventory_for_select.loc[inventory_for_select["id"] != str(selected_product_id), "name"].astype(str).str.strip().str.lower().tolist()
+
+                if not clean_name:
+                    st.error("Product name is required.")
+                elif clean_name.lower() in other_names:
+                    st.error("Another product already has this name. Please use a unique product name.")
+                elif pricing_error:
+                    st.error(f"Cannot update product pricing because {pricing_error}.")
+                elif new_price <= 0:
+                    st.error("New final price must be greater than zero.")
+                else:
+                    updated = inventory.copy()
+                    idx_matches = updated.index[updated["id"].astype(str) == str(selected_product_id)]
+                    if len(idx_matches) == 0:
+                        st.error("Selected product was not found. Please refresh and try again.")
+                    else:
+                        idx = idx_matches[0]
+                        before = updated.loc[idx].to_dict()
+                        updated.loc[idx, "name"] = clean_name
+                        updated.loc[idx, "unit_cost"] = unit_cost
+                        updated.loc[idx, "desired_margin"] = margin
+                        updated.loc[idx, "risk_buffer"] = risk
+                        updated.loc[idx, "expected_monthly_units"] = expected_units
+                        updated.loc[idx, "unit_price"] = new_price
+                        updated.loc[idx, "special_deal"] = special_deal.strip()
+                        save_inventory(updated)
+                        append_audit(
+                            "PRODUCT_RENAMED_AND_PRICE_UPDATED",
+                            "N/A",
+                            "Pricing User",
+                            "Product name and pricing updated through Pricing Engine",
+                            before=before,
+                            after=updated.loc[idx].to_dict(),
+                            metadata={
+                                "old_name": before.get("name"),
+                                "new_name": clean_name,
+                                "old_price": safe_float(before.get("unit_price")),
+                                "new_price": new_price,
+                                "calculated_price_before_rounding": calculated_price,
+                                "rounding": rounding,
+                                "manual_override_used": override > 0,
+                            },
+                        )
+                        st.toast("Product name and pricing updated. POS catalog refreshed.", icon="✅")
+                        st.rerun()
 
 def page_sales_reports(sales: List[Dict[str, Any]]) -> None:
     hero("Sales History & Reports", "Review sales, edit/void within monthly window, export backups, and inspect audit trail.")
