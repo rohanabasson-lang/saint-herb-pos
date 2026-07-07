@@ -4682,6 +4682,113 @@ def stock_valuation_summary(inventory: pd.DataFrame, sales: List[Dict[str, Any]]
     }
 
 
+
+def inventory_velocity_label(days_stock_on_hand: Any, units_sold: Any, days_since_last_sale: Any) -> str:
+    """Classify product movement using stock cover and actual POS sales velocity."""
+    days = safe_float(days_stock_on_hand, 999.0)
+    units = safe_float(units_sold, 0.0)
+    days_since = safe_float(days_since_last_sale, 999.0)
+
+    if units <= 0:
+        return "Dead Stock / No Recorded Sales"
+    if days < 0:
+        return "Negative Stock - Replenish"
+    if days <= 7:
+        return "Fast Moving - Reorder"
+    if days <= 21 and days_since <= 7:
+        return "Healthy Mover"
+    if days_since >= 14:
+        return "Slow Moving"
+    return "Normal"
+
+
+def product_analytics_dataframe(inventory: pd.DataFrame, sales: List[Dict[str, Any]]) -> pd.DataFrame:
+    """Build product-level analytics from active POS sales, including embedded historical rows."""
+    inv = inventory.copy()
+    if inv.empty:
+        inv = pd.DataFrame(columns=["id", "name", "category", "quantity_on_hand", "unit_price", "days_stock_on_hand", "status", "opening_quantity"])
+
+    items = sale_items_to_dataframe(sales, include_voided=False)
+    if items.empty:
+        base = inv.copy()
+        base["product_id"] = base.get("id", "")
+        base["units_sold"] = 0.0
+        base["revenue"] = 0.0
+        base["average_selling_price"] = 0.0
+        base["last_sale_date"] = ""
+        base["days_since_last_sale"] = pd.NA
+        base["stock_turnover"] = 0.0
+        base["revenue_contribution_pct"] = 0.0
+        return base[[
+            "product_id", "name", "category", "units_sold", "revenue", "average_selling_price",
+            "last_sale_date", "days_since_last_sale", "quantity_on_hand", "days_stock_on_hand",
+            "stock_turnover", "revenue_contribution_pct", "status"
+        ]].copy() if all(c in base.columns for c in ["name", "category", "quantity_on_hand", "days_stock_on_hand", "status"]) else pd.DataFrame()
+
+    items = items.copy()
+    items["name"] = items["name"].map(normalize_product_name)
+    items["date_parsed"] = pd.to_datetime(items["date"], errors="coerce").dt.date
+    items["product_id"] = items["product_id"].fillna("").astype(str)
+
+    sales_agg = (
+        items.groupby(["product_id", "name"], dropna=False, as_index=False)
+        .agg(
+            units_sold=("quantity", "sum"),
+            revenue=("line_total", "sum"),
+            last_sale_date=("date_parsed", "max"),
+        )
+    )
+    sales_agg["average_selling_price"] = sales_agg.apply(
+        lambda r: safe_float(r["revenue"]) / safe_float(r["units_sold"]) if safe_float(r["units_sold"]) > 0 else 0.0,
+        axis=1,
+    )
+
+    inv_cols = [c for c in ["id", "name", "category", "quantity_on_hand", "unit_price", "days_stock_on_hand", "status", "opening_quantity"] if c in inv.columns]
+    inv_small = inv[inv_cols].copy() if inv_cols else pd.DataFrame(columns=["id", "name"])
+    inv_small["product_id"] = inv_small.get("id", "").astype(str)
+    inv_small = inv_small.drop(columns=["id"], errors="ignore")
+
+    merged = sales_agg.merge(inv_small, on="product_id", how="outer", suffixes=("_sold", "_inventory"))
+    merged["name"] = merged.get("name_sold", pd.Series(dtype=str)).combine_first(merged.get("name_inventory", pd.Series(dtype=str))).fillna("")
+    merged["category"] = merged.get("category", pd.Series(dtype=str)).fillna("Miscellaneous/Unallocated Sales")
+    merged["units_sold"] = pd.to_numeric(merged.get("units_sold", 0.0), errors="coerce").fillna(0.0)
+    merged["revenue"] = pd.to_numeric(merged.get("revenue", 0.0), errors="coerce").fillna(0.0)
+    merged["average_selling_price"] = pd.to_numeric(merged.get("average_selling_price", 0.0), errors="coerce").fillna(0.0)
+    merged["quantity_on_hand"] = pd.to_numeric(merged.get("quantity_on_hand", 0.0), errors="coerce").fillna(0.0)
+    merged["days_stock_on_hand"] = pd.to_numeric(merged.get("days_stock_on_hand", 999.0), errors="coerce").fillna(999.0)
+    merged["status"] = merged.get("status", pd.Series(dtype=str)).fillna("Unknown")
+
+    today = date.today()
+    def _days_since(d: Any) -> Any:
+        if pd.isna(d) or d == "":
+            return pd.NA
+        try:
+            return (today - pd.to_datetime(d).date()).days
+        except Exception:
+            return pd.NA
+
+    merged["days_since_last_sale"] = merged.get("last_sale_date", pd.Series(dtype=object)).map(_days_since)
+    merged["last_sale_date"] = merged.get("last_sale_date", pd.Series(dtype=object)).astype(str).replace({"NaT": "", "nan": ""})
+
+    opening_qty = pd.to_numeric(merged.get("opening_quantity", merged["quantity_on_hand"] + merged["units_sold"]), errors="coerce").fillna(merged["quantity_on_hand"] + merged["units_sold"])
+    denom = opening_qty.where(opening_qty > 0, merged["quantity_on_hand"] + merged["units_sold"])
+    merged["stock_turnover"] = merged.apply(lambda r: safe_float(r["units_sold"]) / max(safe_float(denom.loc[r.name]), 1.0), axis=1)
+
+    total_revenue = float(merged["revenue"].sum())
+    merged["revenue_contribution_pct"] = merged["revenue"].map(lambda x: (safe_float(x) / total_revenue * 100) if total_revenue > 0 else 0.0)
+
+    output_cols = [
+        "product_id", "name", "category", "units_sold", "revenue", "average_selling_price",
+        "last_sale_date", "days_since_last_sale", "quantity_on_hand", "days_stock_on_hand",
+        "stock_turnover", "revenue_contribution_pct", "status"
+    ]
+    for col in output_cols:
+        if col not in merged.columns:
+            merged[col] = "" if col in ["product_id", "name", "category", "last_sale_date", "status"] else 0.0
+
+    return merged[output_cols].sort_values(["units_sold", "revenue"], ascending=[False, False]).reset_index(drop=True)
+
+
 def build_backup_zip(inventory: pd.DataFrame, sales: List[Dict[str, Any]], only_today: bool = False) -> bytes:
     sales_df = sales_to_dataframe(sales, include_voided=True)
     items_df = sale_items_to_dataframe(sales, include_voided=True)
@@ -5058,8 +5165,8 @@ def page_dashboard(inventory: pd.DataFrame, sales: List[Dict[str, Any]]) -> None
     if items_df.empty:
         st.info("No product-level sales data yet.")
     else:
-        top = items_df.groupby("name", as_index=False).agg(quantity=("quantity", "sum"), sales=("line_total", "sum")).sort_values("sales", ascending=False).head(10)
-        fig = px.bar(top, x="sales", y="name", orientation="h", text_auto=".2s", height=420, labels={"sales": "Sales (R)", "name": "Product"})
+        top = items_df.groupby("name", as_index=False).agg(quantity=("quantity", "sum"), sales=("line_total", "sum")).sort_values(["quantity", "sales"], ascending=[False, False]).head(10)
+        fig = px.bar(top, x="quantity", y="name", orientation="h", text_auto=".0f", height=420, labels={"quantity": "Units Sold", "name": "Product"})
         fig.update_layout(yaxis={"categoryorder": "total ascending"}, margin=dict(l=10, r=10, t=30, b=10))
         st.plotly_chart(fig, use_container_width=True)
 
@@ -5095,16 +5202,23 @@ def page_dashboard(inventory: pd.DataFrame, sales: List[Dict[str, Any]]) -> None
 
     st.divider()
     st.subheader("Trend Charts")
-    if not filtered_sales.empty:
+    filtered_sales = sales_to_dataframe(sales, include_voided=False)
+    if filtered_sales.empty:
+        st.info("No trend data available yet.")
+    else:
+        filtered_sales["Date"] = pd.to_datetime(filtered_sales["Timestamp"], errors="coerce").dt.date
+        filtered_sales = filtered_sales.dropna(subset=["Date"])
         trend = filtered_sales.groupby("Date", as_index=False).agg(
             revenue=("Total (R)", "sum"),
             transactions=("Sale ID", "count"),
         )
-        filtered_items_daily = items_df.copy()
-        filtered_items_daily["date_parsed"] = pd.to_datetime(filtered_items_daily["date"], errors="coerce").dt.date
-        filtered_items_daily = filtered_items_daily[(filtered_items_daily["date_parsed"] >= start_date) & (filtered_items_daily["date_parsed"] <= end_date)]
-        units_by_day = filtered_items_daily.groupby("date_parsed", as_index=False)["quantity"].sum().rename(columns={"date_parsed": "Date", "quantity": "units"})
-        trend = trend.merge(units_by_day, on="Date", how="left").fillna({"units": 0})
+        filtered_items_daily = sale_items_to_dataframe(sales, include_voided=False)
+        if not filtered_items_daily.empty:
+            filtered_items_daily["date_parsed"] = pd.to_datetime(filtered_items_daily["date"], errors="coerce").dt.date
+            units_by_day = filtered_items_daily.groupby("date_parsed", as_index=False)["quantity"].sum().rename(columns={"date_parsed": "Date", "quantity": "units"})
+            trend = trend.merge(units_by_day, on="Date", how="left").fillna({"units": 0})
+        else:
+            trend["units"] = 0
         trend["cumulative_revenue"] = trend["revenue"].cumsum()
         trend["cumulative_units"] = trend["units"].cumsum()
 
@@ -5151,7 +5265,7 @@ def page_pos(inventory: pd.DataFrame) -> None:
                     filtered = filtered[filtered["category"] == category_filter]
                 if search:
                     s = search.lower()
-                    filtered = filtered[filtered["name"].str.lower().str.contains(s, na=False) | filtered["category"].str.lower().str.contains(s, na=False)]
+                    filtered = filtered[filtered["name"].str.lower().str.contains(s, na=False, regex=False) | filtered["category"].str.lower().str.contains(s, na=False, regex=False)]
                 if filtered.empty:
                     st.info("No products match the current filters.")
                     continue
@@ -5172,7 +5286,9 @@ def page_pos(inventory: pd.DataFrame) -> None:
                             """, unsafe_allow_html=True)
                             qty_key = f"qty_{category_filter}_{product['id']}"
                             step = 0.5 if str(product.get("unit")) == "gram" or str(product.get("selling_mode")) == "Per Gram" else 1.0
-                            qty = st.number_input("Qty", min_value=0.0, max_value=safe_float(product["quantity_on_hand"]), value=1.0 if safe_float(product["quantity_on_hand"]) >= 1 else 0.0, step=step, key=qty_key, label_visibility="collapsed")
+                            available_qty = max(0.0, safe_float(product.get("quantity_on_hand", 0.0)))
+                            default_qty = min(1.0, available_qty) if available_qty > 0 else 0.0
+                            qty = st.number_input("Qty", min_value=0.0, max_value=available_qty, value=default_qty, step=step, key=qty_key, label_visibility="collapsed")
                             b1, b2, b3, b4 = st.columns(4)
                             with b1:
                                 if st.button("+1", key=f"plus1_{category_filter}_{product['id']}", use_container_width=True):
@@ -5817,7 +5933,7 @@ def page_import_historical_sales(inventory: pd.DataFrame, sales: List[Dict[str, 
     outdoor_units = rows.loc[rows["product_name"].map(lambda x: canonical_text(x) == "outdoor"), "quantity"].sum()
     st.caption(f"Outdoor embedded units: {outdoor_units:,.0f}. Miscellaneous/unclear rows are kept under Miscellaneous/Unallocated Sales where applicable.")
 
-    if st.button("Seed / Repair Embedded Historical Sales", type="primary", use_container_width=True):
+    if st.button("Seed / Repair Historical Sales", type="primary", use_container_width=True):
         updated_inventory, combined_sales, import_summary = ensure_embedded_historical_sales_loaded(inventory, sales)
         if import_summary.get("imported_transactions", 0):
             st.success(
@@ -5899,7 +6015,7 @@ def main() -> None:
         st.markdown("## 🌿 Saint Herb")
         st.caption("Premium Inventory + POS")
         st.divider()
-        page = st.radio("Navigation", ["Dashboard", "Point of Sale", "Inventory", "Pricing", "Import Historical Sales", "Sales Reports", "Settings"], label_visibility="collapsed")
+        page = st.radio("Navigation", ["Dashboard", "Point of Sale", "Inventory", "Pricing", "Historical Sales", "Sales Reports", "Settings"], label_visibility="collapsed")
         st.divider()
         st.caption("Current Session")
         st.write(f"Cart items: **{len(st.session_state.cart)}**")
@@ -5914,7 +6030,7 @@ def main() -> None:
         page_inventory(inventory)
     elif page == "Pricing":
         page_pricing(inventory)
-    elif page == "Import Historical Sales":
+    elif page == "Historical Sales":
         page_import_historical_sales(inventory, sales)
     elif page == "Sales Reports":
         page_sales_reports(sales)
